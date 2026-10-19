@@ -1,7 +1,7 @@
 name: Torrent Hub
-version: "1.0.0-rc1"
+version: "1.1.0"
 slug: torrent_hub
-description: Личный метапоиск по торрент-трекерам, мониторинг, proxy и TorrServer
+description: Самостоятельный поиск торрентов: трекеры, агрегаторы, прокси, TorrServer
 arch:
   - aarch64
 startup: services
@@ -9,13 +9,10 @@ boot: auto
 init: false
 ingress: true
 ingress_port: 8765
-panel_icon: mdi:magnify-scan
+panel_icon: mdi:movie-search
 panel_title: Torrent Hub
 panel_admin: true
 watchdog: http://[HOST]:8765/healthz
 ports:
-  9696/tcp: null
-ports_description:
-  9696/tcp: 'Дополнительный локальный вход в Prowlarr (отключён по умолчанию)'
 options: {}
 schema: {}

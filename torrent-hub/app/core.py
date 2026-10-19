@@ -88,20 +88,24 @@ def result_of(row: dict, source: str) -> dict:
             'magnet': magnet if magnet_hash(magnet) else '', 'hash': hashcode,
             'url': str(row.get('infoUrl') or row.get('url') or '')[:1400],
             'download': download[:2500], 'indexer_id': row.get('indexerId'),
-            'date': str(row.get('publishDate') or row.get('createTime') or '')[:40]}
+            'date': str(row.get('publishDate') or row.get('createTime') or row.get('date') or row.get('pubDate') or '')[:40]}
 
 
 def merge_results(groups: list[list[dict]], limit=300) -> list[dict]:
     unique: dict[str, dict] = {}
     for group in groups:
         for x in group:
+            x={**x,'source_names':x.get('source_names') or [x.get('source','')]}
             key = 'h:'+x['hash'] if x['hash'] else 's:'+re.sub(r'\W+', '', x['title'].lower())+':'+str(x['size'])
             if key not in unique:
                 unique[key] = x
             else:
                 old = unique[key]
+                origin=list(dict.fromkeys(old['source_names']+x['source_names']))
                 if (bool(x['magnet']), x['seeders']) > (bool(old['magnet']), old['seeders']):
-                    unique[key] = x
+                    unique[key] = {**x,'source_names':origin}
+                else:
+                    old['source_names']=origin
     return sorted(unique.values(), key=lambda a:(bool(a['magnet']),a['seeders'],a['size']), reverse=True)[:limit]
 
 

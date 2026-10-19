@@ -8,6 +8,7 @@ import os
 import pathlib
 import secrets
 import time
+import re
 import uuid
 import xml.etree.ElementTree as ET
 from collections import deque
@@ -33,25 +34,37 @@ MUTEX=asyncio.Lock()
 CHECKS={}
 EVENTS=deque(maxlen=200)
 SEARCH_CACHE={}
+JOBS={}
+JOB_LOCK=asyncio.Lock()
+AUTO_INSTALL_DONE=False
+DEFAULT_TRACKERS=('rutor','noname-club','megapeer')
 
 
 def defaults():
-    return {'proxy': {'mode':'proxy','type':'socks5','host':'192.168.1.100','port':2080,'username':'','password':''},
+    return {'version':2,'proxy': {'mode':'proxy','type':'socks5','host':'192.168.1.100','port':2080,'username':'','password':''},
             'sources':[
-                {'id':'jr-maxvol','name':'jr.maxvol.pro','url':'https://jr.maxvol.pro','enabled':False,'group':'public','route':'inherit','kind':'jacred'},
-                {'id':'jac-black','name':'jac.black','url':'https://jac.black','enabled':False,'group':'public','route':'inherit','kind':'jacred'},
-                {'id':'ru-jac-black','name':'ru.jac.black','url':'https://ru.jac.black','enabled':False,'group':'public','route':'inherit','kind':'jacred'},
-                {'id':'knaben','name':'Knaben API','url':'https://api.knaben.org/v1','enabled':False,'group':'public','route':'inherit','kind':'knaben'}],
+                {'id':'jr-maxvol','name':'jr.maxvol.pro','url':'https://jr.maxvol.pro','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
+                {'id':'jac-black','name':'jac.black','url':'https://jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
+                {'id':'ru-jac-black','name':'ru.jac.black','url':'https://ru.jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
+                {'id':'knaben','name':'Knaben API','url':'https://api.knaben.org/v1','enabled':True,'group':'public','route':'inherit','kind':'knaben'}],
             'servers':[
                 {'id':'lg','name':'LG — приставка','url':'http://192.168.1.148:8090','username':'','password':''},
                 {'id':'ha','name':'Home Assistant','url':'http://192.168.1.100:8090','username':'','password':''}],
-            'search':{'enable_prowlarr':True,'check_interval':300,'max_results':300,'remember_history':False}}
+            'search':{'enable_prowlarr':True,'check_interval':300,'max_results':300,'remember_history':False,'include_public':True}}
 
 
 def load():
     if STATE.exists():
         value=json.loads(STATE.read_text('utf8'))
         if isinstance(value,dict) and 'proxy' in value and 'servers' in value:
+            if value.get('version',1)<2:
+                # Earlier releases disabled every aggregator by default, making the
+                # 'include public' checkbox a no-op for most installations.
+                initial={x['id'] for x in defaults()['sources']}
+                for src in value.get('sources',[]):
+                    if src.get('id') in initial: src['enabled']=True
+                value.setdefault('search',{})['include_public']=True
+                value['version']=2
             return value
     return defaults()
 
@@ -73,6 +86,8 @@ def publish(message: str):
 def redacted():
     out=copy.deepcopy(config)
     out['proxy']['password_set']=bool(out['proxy'].pop('password',''))
+    for source in out['sources']:
+        source['api_key_set']=bool(source.pop('api_key',''))
     for server in out['servers']:
         server['password_set']=bool(server.pop('password',''))
     return out
@@ -124,33 +139,109 @@ async def check_server(server:dict) -> dict:
 
 
 async def search_external(src:dict,proxy:dict,query:str) -> list[dict]:
+    """Search self-hosted or public APIs; a reachable homepage is not considered search."""
     url=sanitize_url(src['url'])
-    if src.get('kind','jacred')=='jacred':
-        r=await fetch(proxy,src.get('route','inherit'),url+'/api/v1.0/torrents',params={'search':query},timeout=25)
+    kind=src.get('kind','jacred')
+    route=src.get('route','inherit')
+    key=src.get('api_key','')
+    if kind=='jacred':
+        endpoint=url if url.endswith('/api/v1.0/torrents') else url+'/api/v1.0/torrents'
+        params={'search':query}
+        if key:params['apikey']=key
+        r=await fetch(proxy,route,endpoint,params=params,timeout=22)
         obj=r.json()
-        if isinstance(obj,dict):obj=obj.get('results',obj.get('torrents',obj.get('data')))
-    elif src.get('kind')=='knaben':
-        r=await fetch(proxy,src.get('route','inherit'),url,method='POST',json={'query':query,'size':100,'hide_unsafe':True},timeout=25)
+        if isinstance(obj,dict):obj=next((obj[k] for k in ('results','torrents','data','items') if isinstance(obj.get(k),list)),None)
+    elif kind=='knaben':
+        endpoint=url if url.endswith('/api/v1') or url.endswith('/v1') else url.rstrip('/')
+        r=await fetch(proxy,route,endpoint,method='POST',json={'query':query,'size':100,'hide_unsafe':True},timeout=22)
         response=r.json()
-        obj=response.get('hits') if isinstance(response,dict) else None
+        obj=response.get('hits',response.get('results')) if isinstance(response,dict) else response
         if isinstance(obj,list):
             obj=[{'title':row.get('title'), 'infoHash':row.get('hash'),
                   'magnetUrl':row.get('magnetUrl'), 'size':row.get('bytes'),
                   'seeders':row.get('seeders'), 'leechers':row.get('peers'),
-                  'url':row.get('details'), 'tracker':row.get('cachedOrigin')}
+                  'url':row.get('details'), 'tracker':row.get('cachedOrigin'),'date':row.get('date')}
                  for row in obj if isinstance(row,dict)]
+    elif kind=='torznab':
+        endpoint=url if url.endswith('/api') else url+'/api'
+        params={'t':'search','q':query,'limit':100}
+        if key:params['apikey']=key
+        r=await fetch(proxy,route,endpoint,params=params,timeout=22)
+        if len(r.content)>3_000_000:raise ValueError('Слишком большой ответ Torznab')
+        root=ET.fromstring(r.content)
+        if root.find('.//error') is not None:
+            raise ValueError('Torznab сообщил об ошибке авторизации или запроса')
+        obj=[]
+        for item in root.findall('.//item')[:100]:
+            fields={'title':item.findtext('title',''), 'url':item.findtext('guid','')}
+            encl=item.find('enclosure')
+            if encl is not None:
+                fields['downloadUrl']=encl.attrib.get('url','')
+                fields['size']=encl.attrib.get('length',0)
+            fields['downloadUrl']=fields.get('downloadUrl') or item.findtext('link','')
+            for node in item.iter():
+                if node.tag.rsplit('}',1)[-1]!='attr':continue
+                k=node.attrib.get('name','').lower();v=node.attrib.get('value','')
+                if k in ('seeders','peers','leechers','size'):fields[k]=v
+                if k in ('infohash','hash'):fields['infoHash']=v
+                if k=='magneturl':fields['magnetUrl']=v
+            obj.append(fields)
     else:raise ValueError('Неизвестный тип API')
-    if not isinstance(obj,list):raise ValueError('API не вернул массив поисковых результатов')
-    return [result_of(row,src['name']) for row in obj if isinstance(row,dict)]
+    if not isinstance(obj,list):raise ValueError('API не вернул список поисковых результатов')
+    out=[]
+    for row in obj[:250]:
+        if isinstance(row,dict):
+            found=result_of(row,src['name'])
+            found['route']=route
+            found['source_id']=src['id']
+            out.append(found)
+    return out
 
 
 async def check_jacred(source:dict,proxy:dict,probe=True) -> dict:
     start=time.monotonic()
     try:
-        obj=await search_external(source,proxy,'ubuntu' if probe else 'test')
-        return status(True,f'Поисковое API ответило, тестовых результатов: {len(obj)}',round((time.monotonic()-start)*1000),count=len(obj))
+        obj=await search_external(source,proxy,'Интерстеллар' if probe else 'ubuntu')
+        delay=round((time.monotonic()-start)*1000)
+        return status(True,('Найдены реальные раздачи: ' if obj else 'API отвечает, но тестовый поиск пустой: ')+str(len(obj)),delay,count=len(obj),state='ok' if obj else 'empty')
     except Exception as exc:
-        return status(False,'Ошибка поискового API: '+str(exc))
+        return status(False,'Ошибка поискового API: '+str(exc),round((time.monotonic()-start)*1000),state='error')
+
+
+async def _engine_source(query:str,selected_ids:list[int]|None=None):
+    await verify_engine_route()
+    params={'query':query}
+    if selected_ids:
+        params['indexerIds']=selected_ids
+    rows=(await prowlarr('GET','/api/v1/search',params=params)).json()
+    if isinstance(rows,dict):rows=rows.get('releases',rows.get('items',[]))
+    if not isinstance(rows,list):raise ValueError('Prowlarr вернул неожиданный формат результатов')
+    return [dict(result_of(row,'Prowlarr'), source_id='prowlarr', route='inherit') for row in rows[:500]]
+
+
+async def install_default_indexers():
+    """Try to provision public trackers; network errors never prevent Hub startup."""
+    global AUTO_INSTALL_DONE
+    if AUTO_INSTALL_DONE:return
+    try:
+        installed=(await prowlarr('GET','/api/v1/indexer')).json()
+        schemas=(await prowlarr('GET','/api/v1/indexer/schema')).json()
+        defined={re.sub('[^a-z0-9]','',str(x.get('definitionName') or x.get('name','')).lower()):x for x in schemas if x.get('protocol')=='torrent'}
+        existing={re.sub('[^a-z0-9]','',str(x.get('name','')).lower()) for x in installed}
+        for ident in DEFAULT_TRACKERS:
+            key=ident.replace('-','')
+            src=defined.get(key)
+            if src is None:
+                publish('Определение '+ident+' не найдено; проверим позже')
+                continue
+            if re.sub('[^a-z0-9]','',str(src.get('name','')).lower()) in existing:continue
+            try:
+                model=copy.deepcopy(src);model['enable']=True
+                await prowlarr('POST','/api/v1/indexer',params={'forceSave':'true'},json=model)
+                publish('Автоматически добавлен трекер '+str(src.get('name',ident)))
+            except Exception as exc:publish('Не удалось добавить '+ident+': '+str(exc)[:110])
+        AUTO_INSTALL_DONE=not any(x.replace('-','') not in defined for x in DEFAULT_TRACKERS)
+    except Exception as exc:publish('Автоматическая настройка трекеров: '+str(exc)[:130])
 
 
 async def verify_engine_route():
@@ -186,7 +277,10 @@ async def run_check(category='all',entry=None,draft=None):
     elif category=='server':
         value=await check_server(draft or next(x for x in config['servers'] if x['id']==entry))
     elif category=='source':
-        value=await check_jacred(draft or next(x for x in config['sources'] if x['id']==entry),proxy)
+        item=draft or next(x for x in config['sources'] if x['id']==entry)
+        if draft and not item.get('api_key'):
+            item={**item,'api_key':next((x.get('api_key','') for x in config['sources'] if x['id']==item.get('id')),'')}
+        value=await check_jacred(item,proxy)
     elif category=='all':
         async def task(category,name,item=None):
             try:
@@ -204,12 +298,20 @@ async def run_check(category='all',entry=None,draft=None):
 
 
 async def monitoring():
+    first=True
     while True:
         try:
+            if prowlarr_key():
+                if first:
+                    first=False
+                    if config['proxy']['mode'] in ('proxy','direct'):
+                        try:await apply_engine_proxy()
+                        except Exception as exc:publish('Прокси Prowlarr: '+str(exc)[:130])
+                if not AUTO_INSTALL_DONE:await install_default_indexers()
             await run_check('all')
         except Exception as exc:
             log.error('check cycle: %s',exc)
-        await asyncio.sleep(max(60,int(config['search'].get('check_interval',300))))
+        await asyncio.sleep(12 if first else max(60,int(config['search'].get('check_interval',300))))
 
 
 @asynccontextmanager
@@ -225,7 +327,9 @@ app=FastAPI(title='Torrent Hub',docs_url=None,redoc_url=None,lifespan=lifespan)
 
 class Search(BaseModel):
     query:str=Field(min_length=2,max_length=160)
-    include_public:bool=False
+    include_public:bool=True
+    selected_sources:list[str]|None=None
+    selected_indexers:list[int]|None=None
 
 class Send(BaseModel):
     server_ids:list[str]
@@ -286,8 +390,10 @@ def update_config(old,body):
             if collection=='sources':
                 row.update({'enabled':bool(item.get('enabled',False)),
                     'group':item.get('group','public'),'route':item.get('route','inherit'),
-                    'kind':item.get('kind','jacred')})
-                if row['group'] not in ('main','public') or row['route'] not in ('inherit','direct','proxy','auto') or row['kind'] not in ('jacred','knaben'):
+                    'kind':item.get('kind','jacred'),
+                    'api_key':str(item.get('api_key') or previous.get(uid,{}).get('api_key',''))[:256]})
+                if item.get('clear_api_key'):row['api_key']=''
+                if row['group'] not in ('main','public') or row['route'] not in ('inherit','direct','proxy','auto') or row['kind'] not in ('jacred','knaben','torznab'):
                     raise ValueError('Неверный тип поискового источника')
             else:
                 row['username']=str(item.get('username',''))[:120]
@@ -404,8 +510,7 @@ async def delete_indexer(indexer_id:int):
     except Exception as exc:raise HTTPException(502,str(exc))
 
 
-@app.post('/api/engine-proxy')
-async def configure_engine_proxy():
+async def apply_engine_proxy():
     """Keep Prowlarr General proxy in sync, never quietly skip a failed PUT."""
     proxy=config['proxy']
     if proxy['mode']=='auto':
@@ -427,39 +532,100 @@ async def configure_engine_proxy():
     except Exception as exc:raise HTTPException(502,'Не удалось применить прокси в Prowlarr: '+str(exc))
 
 
-@app.post('/api/search')
-async def search(payload:Search):
-    query=payload.query.strip()
-    if len(query)<2:raise HTTPException(400,'Введите название')
-    tasks=[];names=[]
-    if config['search']['enable_prowlarr']:
-        async def ps():
-            await verify_engine_route()
-            rows=(await prowlarr('GET','/api/v1/search',params={'query':query})).json()
-            return [result_of(row,'Prowlarr') for row in (rows if isinstance(rows,list) else [])]
-        names.append('Prowlarr');tasks.append(ps())
-    for s in config['sources']:
-        if not s['enabled'] or s['group']=='public' and not payload.include_public:continue
-        async def js(src):
-            return await search_external(src,config['proxy'],query)
-        names.append(s['name']);tasks.append(js(s))
-    if not tasks:return {'items':[],'providers':[],'warning':'Не подключено ни одного поискового источника'}
-    responses=await asyncio.gather(*tasks,return_exceptions=True)
-    groups=[];providers=[]
-    for name,response in zip(names,responses):
-        if isinstance(response,Exception):providers.append({'name':name,'ok':False,'message':str(response)[:160]})
-        else:groups.append(response);providers.append({'name':name,'ok':True,'count':len(response)})
-    items=merge_results(groups,config['search'].get('max_results',300))
-    # A small server-side TTL cache makes torrent resolving safe without fetching arbitrary client-provided URLs.
+@app.post('/api/engine-proxy')
+async def configure_engine_proxy():
+    return await apply_engine_proxy()
+
+
+async def provider_plan(payload:Search):
+    cfg=copy.deepcopy(config)
+    plan=[]
+    if cfg['search'].get('enable_prowlarr',True) and (payload.selected_sources is None or 'prowlarr' in payload.selected_sources):
+        plan.append(('prowlarr','Prowlarr',lambda: _engine_source(payload.query.strip(),payload.selected_indexers)))
+    for src in cfg['sources']:
+        if not src['enabled'] or (src['group']=='public' and not payload.include_public):continue
+        if payload.selected_sources is not None and src['id'] not in payload.selected_sources:continue
+        async def search_one(s=src):return await search_external(s,cfg['proxy'],payload.query.strip())
+        plan.append((src['id'],src['name'],search_one))
+    return plan
+
+
+def cache_items(items):
     now=time.monotonic()
     for key,value in list(SEARCH_CACHE.items()):
         if now-value[0]>900:SEARCH_CACHE.pop(key,None)
+    result=[]
     for item in items:
         token=uuid.uuid4().hex
         SEARCH_CACHE[token]=(now,item.copy())
-        item['id']=token
-        item.pop('download',None);item.pop('indexer_id',None)
-    return {'items':items,'providers':providers}
+        displayed=item.copy();displayed['id']=token
+        displayed.pop('download',None);displayed.pop('indexer_id',None)
+        result.append(displayed)
+    return result
+
+
+async def run_search_once(payload:Search):
+    plan=await provider_plan(payload)
+    if not plan:return {'items':[],'providers':[],'warning':'Не включено ни одного поискового источника'}
+    async def one(key,name,fun):
+        started=time.monotonic()
+        try:
+            items=await asyncio.wait_for(fun(),timeout=45)
+            return key,name,items,None,round((time.monotonic()-started)*1000)
+        except Exception as exc:
+            return key,name,[],str(exc)[:230],round((time.monotonic()-started)*1000)
+    values=await asyncio.gather(*(one(*x) for x in plan))
+    providers=[{'id':key,'name':name,'ok':err is None,'count':len(items),'message':err or '', 'latency_ms':ms}
+               for key,name,items,err,ms in values]
+    return {'items':cache_items(merge_results([x[2] for x in values],config['search'].get('max_results',300))), 'providers':providers}
+
+
+@app.post('/api/search')
+async def search(payload:Search):
+    return await run_search_once(payload)
+
+
+async def job_worker(job_id,plan):
+    job=JOBS[job_id]
+    async def run(key,name,fn):
+        started=time.monotonic()
+        try:
+            records=await asyncio.wait_for(fn(),timeout=45)
+            job['groups'][key]=records
+            job['providers'][key].update({'state':'ok' if records else 'empty','count':len(records),'latency_ms':round((time.monotonic()-started)*1000)})
+        except Exception as exc:
+            job['providers'][key].update({'state':'error','message':str(exc)[:220],'latency_ms':round((time.monotonic()-started)*1000)})
+        job['updated']=time.monotonic()
+    try:
+        await asyncio.gather(*(run(*x) for x in plan))
+    finally:
+        job['done']=True
+        job['updated']=time.monotonic()
+
+
+@app.post('/api/search/start')
+async def search_start(payload:Search):
+    plan=await provider_plan(payload)
+    now=time.monotonic()
+    for jobid,j in list(JOBS.items()):
+        if now-j['created']>900:JOBS.pop(jobid,None)
+    if len(JOBS)>30:raise HTTPException(429,'Слишком много одновременных поисков')
+    jid=uuid.uuid4().hex
+    JOBS[jid]={'created':now,'updated':now,'done':not bool(plan),'groups':{},
+               'providers':{key:{'id':key,'name':name,'state':'pending','count':0,'message':'','latency_ms':0} for key,name,_ in plan}}
+    if plan:asyncio.create_task(job_worker(jid,plan))
+    return {'job_id':jid}
+
+
+@app.get('/api/search/job/{job_id}')
+async def search_job(job_id:str):
+    job=JOBS.get(job_id)
+    if not job or time.monotonic()-job['created']>900:raise HTTPException(404,'Поиск не найден или устарел')
+    # Stable search-result ids across polling rounds
+    if 'cached' not in job or job['updated']!=job.get('cached_at'):
+        job['cached']=cache_items(merge_results(list(job['groups'].values()),config['search'].get('max_results',300)))
+        job['cached_at']=job['updated']
+    return {'done':job['done'],'items':job['cached'],'providers':list(job['providers'].values())}
 
 
 @app.post('/api/resolve')
@@ -478,7 +644,7 @@ async def resolve(payload:Resolve):
             if u.hostname in ('localhost','127.0.0.1') and u.port==9696 and u.path.startswith('/api/v1/indexer/'):
                 resp=await prowlarr('GET',u.path+('?' + u.query if u.query else ''))
             else:
-                resp=await fetch(config['proxy'],'inherit',link,timeout=25)
+                resp=await fetch(config['proxy'],item.get('route','inherit'),link,timeout=25)
             magnet=magnet_from_torrent(resp.content)
         else:raise ValueError('Некорректная ссылка для скачивания')
         if not magnet_hash(magnet):raise ValueError('Получен некорректный magnet')
@@ -508,6 +674,39 @@ async def send(payload:Send):
         except Exception as exc:results.append({'id':ident,'ok':False,'error':str(exc)[:160]})
     publish('Отправка раздачи '+item['title'][:80]+': '+str(sum(x['ok'] for x in results))+'/' + str(len(results)))
     return {'results':results}
+
+
+@app.get('/api/servers/{server_id}/library')
+async def server_library(server_id:str):
+    server=next((s for s in config['servers'] if s['id']==server_id),None)
+    if not server:raise HTTPException(404,'TorrServer не найден')
+    try:
+        auth=(server.get('username',''),server.get('password','')) if server.get('username') else None
+        async with httpx.AsyncClient(timeout=12,trust_env=False,auth=auth) as client:
+            response=await client.post(sanitize_url(server['url'],private=True)+'/torrents',json={'action':'list'})
+            response.raise_for_status()
+        data=response.json()
+        return {'items':data if isinstance(data,list) else []}
+    except Exception as exc:raise HTTPException(502,'Ошибка библиотеки TorrServer: '+str(exc)[:170])
+
+
+class ServerRemove(BaseModel):
+    hash:str
+
+
+@app.post('/api/servers/{server_id}/remove')
+async def server_remove(server_id:str,payload:ServerRemove):
+    if not re.fullmatch('[a-fA-F0-9]{40}',payload.hash):raise HTTPException(400,'Некорректный infohash')
+    server=next((s for s in config['servers'] if s['id']==server_id),None)
+    if not server:raise HTTPException(404,'TorrServer не найден')
+    try:
+        auth=(server.get('username',''),server.get('password','')) if server.get('username') else None
+        async with httpx.AsyncClient(timeout=12,trust_env=False,auth=auth) as client:
+            response=await client.post(sanitize_url(server['url'],private=True)+'/torrents',json={'action':'rem','hash':payload.hash})
+            response.raise_for_status()
+        publish('Удалена раздача с '+server['name'])
+        return {'ok':True}
+    except Exception as exc:raise HTTPException(502,'Ошибка удаления: '+str(exc)[:180])
 
 
 if __name__=='__main__':

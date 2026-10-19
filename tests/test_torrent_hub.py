@@ -116,7 +116,7 @@ def test_search_and_send_through_api(monkeypatch):
 
 
 def test_public_only_by_checkbox(monkeypatch):
-    cfg=main.defaults();cfg['search']['enable_prowlarr']=False;cfg['sources'][0]['enabled']=True
+    cfg=main.defaults();cfg['search']['enable_prowlarr']=False;[row.update(enabled=(i==0)) for i,row in enumerate(cfg['sources'])]
     monkeypatch.setattr(main,'config',cfg)
     async def fake_fetch(*args,**kwargs):
         class R:
@@ -130,7 +130,7 @@ def test_public_only_by_checkbox(monkeypatch):
 
 
 def test_jacred_direct_search_with_public_disabled(monkeypatch):
-    cfg=main.defaults();cfg['search']['enable_prowlarr']=False;cfg['sources'][0]['enabled']=True;cfg['sources'][0]['group']='main'
+    cfg=main.defaults();cfg['search']['enable_prowlarr']=False;[row.update(enabled=(i==0)) for i,row in enumerate(cfg['sources'])];cfg['sources'][0]['group']='main'
     monkeypatch.setattr(main,'config',cfg)
     async def f(*args,**kwargs):
         class R:
@@ -220,3 +220,22 @@ def test_prowlarr_block_when_proxy_not_synced(monkeypatch):
     monkeypatch.setattr(main,'prowlarr',unsynced)
     with pytest.raises(RuntimeError, match='заблокирован'):
         asyncio.run(main.verify_engine_route())
+
+
+def test_curated_definitions_install_without_network(tmp_path):
+    import runner
+    bundled=tmp_path/'bundled'; bundled.mkdir()
+    (bundled/'rutor.yml').write_text('name: RuTor',encoding='utf8')
+    (bundled/'noname-club.yml').write_text('name: NoNaMe Club',encoding='utf8')
+    destination=tmp_path/'state'/'Definitions'/'Custom'
+    assert runner.install_bundled_definitions(bundled,destination)==['rutor.yml','noname-club.yml']
+    assert (destination/'rutor.yml').read_text()=='name: RuTor'
+    (destination/'rutor.yml').write_text('name: Custom RuTor')
+    assert runner.install_bundled_definitions(bundled,destination)==[]
+    assert (destination/'rutor.yml').read_text()=='name: Custom RuTor'
+
+def test_curated_ui_is_not_big_catalog():
+    ui=(pathlib.Path(__file__).parents[1]/'torrent-hub/app/static/index.html').read_text()
+    assert 'Основные торрент-трекеры' in ui
+    assert 'NNM-Club' in ui and 'RuTor' in ui and 'RuTracker' in ui
+    assert 'Дополнительно: найти другой трекер' in ui
