@@ -1,6 +1,6 @@
 # Stable Prowlarr runtime from maintained LinuxServer ARM64 image.
-FROM lscr.io/linuxserver/prowlarr:latest AS prowlarr
 ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base-python:3.13-alpine3.22
+FROM lscr.io/linuxserver/prowlarr:latest AS prowlarr
 FROM ${BUILD_FROM}
 RUN apk add --no-cache icu-libs icu-data-full libstdc++ libgcc sqlite-libs zlib openssl curl ca-certificates tzdata
 COPY --from=prowlarr /app/prowlarr/bin/ /opt/prowlarr/
