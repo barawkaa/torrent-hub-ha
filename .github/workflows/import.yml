@@ -2,6 +2,7 @@ name: Import prepared Torrent Hub archive
 on:
   push:
     paths:
+      - '.github/workflows/import.yml'
       - 'Torrent_Hub_HA_standalone_1.0.0-rc1.zip'
 permissions:
   contents: write
@@ -10,19 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Verify original package integrity
+      - name: Verify package checksum
         run: echo "7418326c2dfeccef3a3694fafb28191b9a59609ad066db18afa3de1b7eb30914  Torrent_Hub_HA_standalone_1.0.0-rc1.zip" | sha256sum --check
-      - name: Unpack project and test
+      - name: Unpack and test
         run: |
           unzip -oq Torrent_Hub_HA_standalone_1.0.0-rc1.zip
           python -m pip install --user pytest fastapi uvicorn 'httpx[socks]'
-          PYTHONPATH=torrent-hub/app python -m pytest -q tests
-      - name: Commit imported project
+          PYTHONPATH=torrent-hub/app python -m pytest -q tests/test_torrent_hub.py
+      - name: Commit source files, excluding workflows
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- README.md repository.yaml torrent-hub tests/test_torrent_hub.py
           git rm -f --ignore-unmatch Torrent_Hub_HA_standalone_1.0.0-rc1.zip
-          git rm -f --ignore-unmatch .github/workflows/import.yml
-          git add -A
-          git commit -m "Import standalone Torrent Hub 1.0.0-rc1" || true
+          git diff --cached --quiet || git commit -m "Import standalone Torrent Hub source and tests"
           git push
