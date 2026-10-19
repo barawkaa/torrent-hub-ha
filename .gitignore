@@ -1,0 +1,11 @@
+# Python bytecode and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+# Local development
+.venv/
+.env
+*.log
+# Editor / OS
+.DS_Store
+.vscode/
