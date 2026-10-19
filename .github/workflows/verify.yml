@@ -28,5 +28,31 @@ jobs:
         with:
           context: ./torrent-hub
           platforms: linux/arm64
+          load: true
+          tags: torrent-hub-ci:arm64
           push: false
           provenance: false
+      - name: Smoke test UI and bundled Prowlarr startup
+        timeout-minutes: 8
+        run: |
+          docker run -d --name torrent-hub-smoke -p 18765:8765 --tmpfs /data:rw,size=512m torrent-hub-ci:arm64
+          for n in $(seq 1 110); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18765/healthz >/dev/null 2>&1; then
+              if curl -fsS --max-time 3 http://127.0.0.1:18765/api/status | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('engine_key_ready') else 1)" 2>/dev/null; then
+                echo "Both Torrent Hub API and Prowlarr started successfully"
+                exit 0
+              fi
+            fi
+            if [ "$(docker inspect --format '{{.State.Running}}' torrent-hub-smoke 2>/dev/null)" != "true" ]; then
+              break
+            fi
+            sleep 3
+          done
+          echo "Smoke startup failed:"
+          docker logs --tail 150 torrent-hub-smoke || true
+          exit 1
+      - name: Container diagnostics
+        if: always()
+        run: |
+          docker logs --tail 60 torrent-hub-smoke || true
+          docker rm -f torrent-hub-smoke || true
