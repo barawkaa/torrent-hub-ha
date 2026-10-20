@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
+from direct import TRACKERS, search_tracker
 from core import (BencodeError, btih, choose_routes, fetch, magnet_for, magnet_from_torrent,
                   magnet_hash, merge_results, proxy_address, result_of, sanitize_url, status)
 
@@ -52,7 +53,8 @@ def defaults():
             'servers':[
                 {'id':'lg','name':'LG — приставка','url':'http://192.168.1.148:8090','username':'','password':''},
                 {'id':'ha','name':'Home Assistant','url':'http://192.168.1.100:8090','username':'','password':''}],
-            'search':{'enable_prowlarr':True,'check_interval':300,'max_results':300,'remember_history':False,'include_public':True}}
+            'search':{'enable_prowlarr':False,'check_interval':900,'max_results':300,'remember_history':False,'include_public':True,'cache_minutes':10,'cache_max':350},
+            'direct_trackers':[{'id':k,'kind':k,'name':v['name'],'url':v['url'],'enabled':True,'route':'inherit'} for k,v in TRACKERS.items()]}
 
 
 def load():
@@ -67,6 +69,11 @@ def load():
                     if src.get('id') in initial: src['enabled']=True
                 value.setdefault('search',{})['include_public']=True
                 value['version']=2
+            value.setdefault('search',{}).update({'enable_prowlarr':False})
+            value['search'].setdefault('cache_minutes',10)
+            value['search'].setdefault('cache_max',350)
+            value.setdefault('direct_trackers',defaults()['direct_trackers'])
+            value['version']=3
             return value
     return defaults()
 
@@ -278,10 +285,19 @@ async def run_check(category='all',entry=None,draft=None):
     proxy=config['proxy'].copy()
     if category=='proxy':
         value=await check_proxy({**proxy,**(draft or {}),'password':(draft or {}).get('password') or proxy.get('password','')})
-    elif category=='prowlarr':
-        value=await check_prowlarr()
+    elif category in ('prowlarr','direct'):
+        enabled=[t for t in config['direct_trackers'] if t.get('enabled')]
+        value=status(bool(enabled),f'Прямой поиск: включено {len(enabled)} трекера(ов)',0,count=len(enabled))
     elif category=='server':
         value=await check_server(draft or next(x for x in config['servers'] if x['id']==entry))
+    elif category=='tracker':
+        item=draft or next(x for x in config['direct_trackers'] if x['id']==entry)
+        started=time.monotonic()
+        try:
+            rows=await search_tracker(item,proxy,'Интерстеллар')
+            value=status(True,f'Прямой поиск: {len(rows)} раздач',round((time.monotonic()-started)*1000),count=len(rows),state='ok' if rows else 'empty')
+        except Exception as exc:
+            value=status(False,'Прямой поиск: '+str(exc)[:180],round((time.monotonic()-started)*1000),state='error')
     elif category=='source':
         item=draft or next(x for x in config['sources'] if x['id']==entry)
         if draft and not item.get('api_key'):
@@ -294,7 +310,8 @@ async def run_check(category='all',entry=None,draft=None):
                 CHECKS[category+(':'+name if name else '')]=r
             except Exception as exc:
                 CHECKS[category+(':'+name if name else '')]=status(False,str(exc))
-        await asyncio.gather(task('proxy',None),task('prowlarr',None),
+        await asyncio.gather(task('proxy',None),task('direct',None),
+            *(task('tracker',t['id']) for t in config['direct_trackers'] if t.get('enabled')),
             *(task('server',s['id']) for s in config['servers']),
             *(task('source',s['id']) for s in config['sources'] if s.get('enabled')))
         return CHECKS
@@ -332,7 +349,7 @@ async def monitoring():
 
 @asynccontextmanager
 async def lifespan(_app):
-    tasks=[asyncio.create_task(monitoring()), asyncio.create_task(initialise_indexers())]
+    tasks=[asyncio.create_task(monitoring())]
     yield
     for task in tasks:
         task.cancel()
@@ -376,7 +393,7 @@ async def icon():
 async def health(): return {'ok':True,'component':'torrent-hub'}
 
 @app.get('/api/status')
-async def overall(): return {'checks':CHECKS,'events':list(EVENTS)[:50], 'engine_key_ready':bool(prowlarr_key())}
+async def overall(): return {'checks':CHECKS,'events':list(EVENTS)[:50], 'engine_key_ready':True,'mode':'live','cache':cache_stats()}
 
 @app.get('/api/config')
 async def settings(): return redacted()
@@ -423,13 +440,37 @@ def update_config(old,body):
                 if item.get('clear_password'):row['password']=''
             clean.append(row)
         out[collection]=clean
+    if 'direct_trackers' in body:
+        candidates=body['direct_trackers']
+        if not isinstance(candidates,list) or len(candidates)>12:raise ValueError('Слишком много трекеров')
+        known=set();arr=[]
+        for item in candidates:
+            kind=item.get('kind','')
+            if kind not in TRACKERS or kind in known:raise ValueError('Неподдерживаемый или повторный тип трекера')
+            known.add(kind)
+            arr.append({'id':kind,'kind':kind,'name':TRACKERS[kind]['name'],
+                        'url':sanitize_url(item.get('url',TRACKERS[kind]['url'])),
+                        'enabled':bool(item.get('enabled',True)),
+                        'route':item.get('route','inherit')})
+            if arr[-1]['route'] not in ('inherit','proxy','direct','auto'):raise ValueError('Неверный маршрут')
+        out['direct_trackers']=arr
     if 'search' in body:
-        s=body['search'];out['search']['enable_prowlarr']=bool(s.get('enable_prowlarr',out['search']['enable_prowlarr']))
+        s=body['search'];out['search']['enable_prowlarr']=False
+        for key,minimum,maximum in (('cache_minutes',1,60),('cache_max',50,1000)):
+            if key in s:
+                value=int(s[key])
+                if not minimum<=value<=maximum:raise ValueError('Неверный лимит кеша')
+                out['search'][key]=value
         if 'check_interval' in s:
             seconds=int(s['check_interval'])
             if seconds<60 or seconds>3600:raise ValueError('Интервал проверок 60–3600 секунд')
             out['search']['check_interval']=seconds
     return out
+
+
+@app.get('/api/direct-trackers')
+async def direct_trackers():
+    return {'trackers':config['direct_trackers'],'cache':cache_stats()}
 
 
 @app.put('/api/config')
@@ -562,8 +603,12 @@ async def configure_engine_proxy():
 async def provider_plan(payload:Search):
     cfg=copy.deepcopy(config)
     plan=[]
-    if cfg['search'].get('enable_prowlarr',True) and (payload.selected_sources is None or 'prowlarr' in payload.selected_sources):
-        plan.append(('prowlarr','Prowlarr',lambda: _engine_source(payload.query.strip(),payload.selected_indexers)))
+    for tracker in cfg['direct_trackers']:
+        if not tracker.get('enabled'):continue
+        ident='direct:'+tracker['id']
+        if payload.selected_sources is not None and ident not in payload.selected_sources:continue
+        async def live(item=tracker):return await search_tracker(item,cfg['proxy'],payload.query.strip())
+        plan.append((ident,tracker['name']+' — напрямую',live))
     for src in cfg['sources']:
         if not src['enabled'] or (src['group']=='public' and not payload.include_public):continue
         if payload.selected_sources is not None and src['id'] not in payload.selected_sources:continue
@@ -574,8 +619,9 @@ async def provider_plan(payload:Search):
 
 def cache_items(items):
     now=time.monotonic()
+    ttl=max(1,int(config['search'].get('cache_minutes',10)))*60
     for key,value in list(SEARCH_CACHE.items()):
-        if now-value[0]>900:SEARCH_CACHE.pop(key,None)
+        if now-value[0]>ttl:SEARCH_CACHE.pop(key,None)
     result=[]
     for item in items:
         token=uuid.uuid4().hex
@@ -584,7 +630,27 @@ def cache_items(items):
         displayed['has_torrent_file']=bool(item.get('download','').startswith(('http://','https://')))
         displayed.pop('download',None);displayed.pop('indexer_id',None)
         result.append(displayed)
+    cap=max(50,int(config['search'].get('cache_max',350)))
+    if len(SEARCH_CACHE)>cap:
+        for key in list(SEARCH_CACHE)[:len(SEARCH_CACHE)-cap]:SEARCH_CACHE.pop(key,None)
     return result
+
+
+def cache_stats():
+    import sys
+    return {'results':len(SEARCH_CACHE),'jobs':len(JOBS),
+            'bytes_estimate':sum(sys.getsizeof(x)+sys.getsizeof(x[1]) for x in SEARCH_CACHE.values()),
+            'ttl_minutes':config['search'].get('cache_minutes',10),'max_results':config['search'].get('cache_max',350),'disk_database_bytes':0}
+
+
+@app.get('/api/cache')
+async def get_cache():return cache_stats()
+
+
+@app.delete('/api/cache')
+async def clear_cache():
+    removed=len(SEARCH_CACHE);SEARCH_CACHE.clear();JOBS.clear()
+    return {'ok':True,'deleted':removed,'cache':cache_stats()}
 
 
 async def run_search_once(payload:Search):
@@ -654,7 +720,7 @@ async def search_job(job_id:str):
 @app.post('/api/resolve')
 async def resolve(payload:Resolve):
     r=SEARCH_CACHE.get(payload.id)
-    if not r or time.monotonic()-r[0]>900:raise HTTPException(404,'Поисковая раздача устарела: повторите поиск')
+    if not r or time.monotonic()-r[0]>int(config['search'].get('cache_minutes',10))*60:raise HTTPException(404,'Поисковая раздача устарела: повторите поиск')
     item=r[1]
     if item['magnet']:return {'magnet':item['magnet']}
     link=item.get('download')
@@ -681,7 +747,7 @@ async def resolve(payload:Resolve):
 # A magnet/infohash alone does not contain the piece hashes and file layout of a .torrent.
 async def torrent_file_for(token: str) -> tuple[bytes,str]:
     r=SEARCH_CACHE.get(token)
-    if not r or time.monotonic()-r[0]>900:
+    if not r or time.monotonic()-r[0]>int(config['search'].get('cache_minutes',10))*60:
         raise HTTPException(404,'Раздача устарела. Повтори поиск.')
     item=r[1]
     link=str(item.get('download') or '')
