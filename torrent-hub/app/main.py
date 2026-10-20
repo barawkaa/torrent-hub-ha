@@ -46,7 +46,7 @@ DEFAULT_TRACKERS=('rutor','noname-club','megapeer')
 
 
 def defaults():
-    return {'version':3,'proxy': {'mode':'direct','type':'socks5','host':'','port':0,'username':'','password':''},
+    return {'version':4,'proxy': {'mode':'direct','type':'socks5','host':'','port':0,'username':'','password':''},
             'sources':[
                 {'id':'jr-maxvol','name':'jr.maxvol.pro','url':'https://jr.maxvol.pro','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
                 {'id':'jac-black','name':'jac.black','url':'https://jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
@@ -58,7 +58,7 @@ def defaults():
             'search':{'enable_prowlarr':False,'check_interval':900,'max_results':300,'remember_history':False,'include_public':True,'cache_minutes':10,'cache_max':350},
             'remote':{'username':'admin','password_salt':'','password_hash':''},
             'smart':{'min_size':5,'max_size':10,'min_seeders':10,'quality':'all','strict':False,'profile':'balanced'},
-            'direct_trackers':[{'id':k,'kind':k,'name':v['name'],'url':v['url'],'enabled':True,'route':'inherit'} for k,v in TRACKERS.items()]}
+            'direct_trackers':[{'id':k,'kind':k,'name':v['name'],'url':v['url'],'enabled':not bool(v.get('requires_auth')),'route':'inherit','cookie':''} for k,v in TRACKERS.items()]}
 
 
 def load():
@@ -79,7 +79,12 @@ def load():
             value.setdefault('remote',defaults()['remote'])
             value.setdefault('smart',defaults()['smart'])
             value.setdefault('direct_trackers',defaults()['direct_trackers'])
-            value['version']=3
+            if value.get('version',1)<4:
+                existing={t.get('id') for t in value['direct_trackers']}
+                for default in defaults()['direct_trackers']:
+                    if default['id'] in ('rutracker','kinozal') and default['id'] not in existing:
+                        value['direct_trackers'].append(default)
+            value['version']=4
             return value
     return defaults()
 
@@ -101,6 +106,8 @@ def publish(message: str):
 def redacted():
     out=copy.deepcopy(config)
     out['proxy']['password_set']=bool(out['proxy'].pop('password',''))
+    for tracker in out.get('direct_trackers',[]):
+        tracker['cookie_set']=bool(tracker.pop('cookie',''))
     out.setdefault('remote',defaults()['remote'])
     out['remote']['password_set']=bool(out['remote'].pop('password_hash',''))
     out['remote'].pop('password_salt',None)
@@ -487,6 +494,10 @@ def update_config(old,body):
                     'enabled':bool(item.get('enabled',True)),
                     'route':item.get('route','inherit')}
             if record['route'] not in ('inherit','proxy','direct','auto'):raise ValueError('Неверный маршрут')
+            if kind in ('rutracker','kinozal'):
+                previous=next((r for r in old.get('direct_trackers',[]) if r.get('id')==ident),{})
+                record['cookie']=str(item.get('cookie') or previous.get('cookie',''))[:3000]
+                if item.get('clear_cookie'):record['cookie']=''
             if kind=='custom':
                 adapter=item.get('adapter',{})
                 if not isinstance(adapter,dict):raise ValueError('Неверное описание CSS-адаптера')
@@ -550,7 +561,7 @@ def update_config(old,body):
 
 @app.get('/api/direct-trackers')
 async def direct_trackers():
-    return {'trackers':config['direct_trackers'],'cache':cache_stats()}
+    return {'trackers':redacted()['direct_trackers'],'cache':cache_stats()}
 
 
 @app.put('/api/config')
@@ -824,6 +835,16 @@ async def search_job(job_id:str):
     return {'done':job['done'],'items':job['cached'],'providers':list(job['providers'].values())}
 
 
+def tracker_download_headers(item:dict,link:str)->dict:
+    tracker=next((x for x in config.get('direct_trackers',[]) if x.get('id')==item.get('source_id')),None)
+    if not tracker or not tracker.get('cookie'):
+        return {}
+    # Only send account session to its configured tracker hostname.
+    if urlsplit(link).hostname != urlsplit(tracker['url']).hostname:
+        return {}
+    return {'Cookie':tracker['cookie']}
+
+
 @app.post('/api/resolve')
 async def resolve(payload:Resolve):
     r=SEARCH_CACHE.get(payload.id)
@@ -835,12 +856,8 @@ async def resolve(payload:Resolve):
     try:
         if link.startswith('magnet:?'):magnet=link
         elif link.startswith(('http://','https://')):
-            # Prevent requests to local/private arbitrary addresses, Prowlarr internal links use known local API only.
-            u=urlsplit(link)
-            if u.hostname in ('localhost','127.0.0.1') and u.port==9696 and u.path.startswith('/api/v1/indexer/'):
-                resp=await prowlarr('GET',u.path+('?' + u.query if u.query else ''))
-            else:
-                resp=await fetch(config['proxy'],item.get('route','inherit'),link,timeout=25)
+            resp=await fetch(config['proxy'],item.get('route','inherit'),link,timeout=25,
+                             headers=tracker_download_headers(item,link))
             magnet=magnet_from_torrent(resp.content)
         else:raise ValueError('Некорректная ссылка для скачивания')
         if not magnet_hash(magnet):raise ValueError('Получен некорректный magnet')
@@ -861,11 +878,8 @@ async def torrent_file_for(token: str) -> tuple[bytes,str]:
     if not link.startswith(('http://','https://')):
         raise HTTPException(409,'Источник предоставил только magnet, исходного .torrent нет.')
     try:
-        u=urlsplit(link)
-        if u.hostname in ('localhost','127.0.0.1') and u.port==9696 and u.path.startswith('/api/v1/indexer/'):
-            resp=await prowlarr('GET',u.path+('?' + u.query if u.query else ''))
-        else:
-            resp=await fetch(config['proxy'],item.get('route','inherit'),link,timeout=28)
+        resp=await fetch(config['proxy'],item.get('route','inherit'),link,timeout=28,
+                         headers=tracker_download_headers(item,link))
         raw=resp.content
         if len(raw)>5_242_880:
             raise ValueError('Файл больше допустимых 5 МБ')
