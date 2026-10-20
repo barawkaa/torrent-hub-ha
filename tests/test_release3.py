@@ -121,9 +121,9 @@ def test_private_tracker_cookies_never_return_via_api(monkeypatch,isolated):
         assert "sensitive-cookie" not in json.dumps(all_sources)
     new=main.update_config(isolated,{"direct_trackers":[{**t,"cookie":""} for t in isolated["direct_trackers"]]})
     assert next(t for t in new["direct_trackers"] if t["id"]=="rutracker")["cookie"]=="bb_session=sensitive-cookie"
-    headers=main.tracker_download_headers({"source_id":"rutracker"},"https://rutracker.org/forum/dl.php?t=123")
+    headers=__import__("asyncio").run(main.tracker_download_headers({"source_id":"rutracker"},"https://rutracker.org/forum/dl.php?t=123"))
     assert headers["Cookie"]=="bb_session=sensitive-cookie"
-    assert main.tracker_download_headers({"source_id":"rutracker"},"https://attacker.example/file.torrent")=={}
+    assert __import__("asyncio").run(main.tracker_download_headers({"source_id":"rutracker"},"https://attacker.example/file.torrent"))=={}
 
 
 def test_rutracker_and_kinozal_html_parsers():
