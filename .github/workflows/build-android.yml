@@ -1,0 +1,56 @@
+name: Build Torrent Hub Android TV APK
+on:
+  push:
+    branches: [android/initial-webview]
+    paths: ['.github/workflows/build-android.yml']
+permissions:
+  contents: write
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Compile Java, test address normalization and build an installable APK
+        run: |
+          cd android
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+      - name: Verify signed APK contains launcher and leanback support
+        run: |
+          set -eu
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          ls -lh "$APK"
+          cp "$APK" torrent-hub-android-1.0.0-rc1.apk
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep 'Alias name'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Torrent-Hub-Android-TV-APK
+          path: torrent-hub-android-1.0.0-rc1.apk
+          retention-days: 90
+          if-no-files-found: error
+      - name: Publish APK as a downloadable GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="android-v1.0.0-rc1"
+          asset="torrent-hub-android-1.0.0-rc1.apk"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+          else
+            gh release create "$tag" "$asset" \
+              --target "$GITHUB_SHA" \
+              --title "Torrent Hub Android / Android TV 1.0.0 RC1" \
+              --notes "Устанавливаемое APK для Android 9+ (совместимость от Android 6). Открывает Torrent Hub с Home Assistant по настраиваемому URL (LAN, Tailscale, Keenetic), поддерживает Android TV и пульт, несколько профилей сервера и скачивание .torrent. Это тестовый APK с debug-подписью: будущий полноценный выпуск потребуется подписать постоянным приватным ключом. Не открывайте порт 8766 наружу без защиты." \
+              --prerelease
+          fi
