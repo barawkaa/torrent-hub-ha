@@ -12,6 +12,7 @@ import time
 import re
 import uuid
 import hashlib
+import hmac
 import xml.etree.ElementTree as ET
 from collections import deque
 from contextlib import asynccontextmanager
@@ -55,6 +56,8 @@ def defaults():
                 {'id':'lg','name':'LG — приставка','url':'http://192.168.1.148:8090','username':'','password':''},
                 {'id':'ha','name':'Home Assistant','url':'http://192.168.1.100:8090','username':'','password':''}],
             'search':{'enable_prowlarr':False,'check_interval':900,'max_results':300,'remember_history':False,'include_public':True,'cache_minutes':10,'cache_max':350},
+            'remote':{'username':'admin','password_salt':'','password_hash':''},
+            'smart':{'min_size':5,'max_size':10,'min_seeders':10,'quality':'all','strict':False,'profile':'balanced'},
             'direct_trackers':[{'id':k,'kind':k,'name':v['name'],'url':v['url'],'enabled':True,'route':'inherit'} for k,v in TRACKERS.items()]}
 
 
@@ -73,6 +76,8 @@ def load():
             value.setdefault('search',{}).update({'enable_prowlarr':False})
             value['search'].setdefault('cache_minutes',10)
             value['search'].setdefault('cache_max',350)
+            value.setdefault('remote',defaults()['remote'])
+            value.setdefault('smart',defaults()['smart'])
             value.setdefault('direct_trackers',defaults()['direct_trackers'])
             value['version']=3
             return value
@@ -96,6 +101,9 @@ def publish(message: str):
 def redacted():
     out=copy.deepcopy(config)
     out['proxy']['password_set']=bool(out['proxy'].pop('password',''))
+    out.setdefault('remote',defaults()['remote'])
+    out['remote']['password_set']=bool(out['remote'].pop('password_hash',''))
+    out['remote'].pop('password_salt',None)
     for source in out['sources']:
         source['api_key_set']=bool(source.pop('api_key',''))
     for server in out['servers']:
@@ -470,6 +478,34 @@ def update_config(old,body):
                         'route':item.get('route','inherit')})
             if arr[-1]['route'] not in ('inherit','proxy','direct','auto'):raise ValueError('Неверный маршрут')
         out['direct_trackers']=arr
+    if 'remote' in body:
+        access=body['remote']
+        if not isinstance(access,dict):raise ValueError('Неправильные настройки доступа')
+        username=str(access.get('username',out['remote'].get('username','admin'))).strip()
+        if not re.fullmatch(r'[a-zA-Z0-9_.-]{3,40}',username):raise ValueError('Логин: 3–40 латинских символов, цифр, точек или дефисов')
+        out['remote']['username']=username
+        if access.get('password'):
+            password=str(access['password'])
+            if len(password)<12 or len(password)>128:raise ValueError('Пароль внешнего доступа: 12–128 символов')
+            salt=secrets.token_bytes(16)
+            out['remote']['password_salt']=salt.hex()
+            out['remote']['password_hash']=hashlib.scrypt(password.encode(),salt=salt,n=16384,r=8,p=1,dklen=32).hex()
+        if access.get('disable'):
+            out['remote']['password_salt']=''
+            out['remote']['password_hash']=''
+    if 'smart' in body:
+        prefs=body['smart']
+        if not isinstance(prefs,dict):raise ValueError('Неверные параметры умного поиска')
+        min_size=float(prefs.get('min_size',out['smart']['min_size']))
+        max_size=float(prefs.get('max_size',out['smart']['max_size']))
+        min_seeders=int(prefs.get('min_seeders',out['smart']['min_seeders']))
+        quality=str(prefs.get('quality',out['smart']['quality']))
+        profile=str(prefs.get('profile',out['smart'].get('profile','balanced')))
+        if not 0<=min_size<=max_size<=200 or not 0<=min_seeders<=2000:raise ValueError('Некорректный диапазон размера или сидов')
+        if quality not in ('all','1080','2160','720'):raise ValueError('Неизвестное качество')
+        if profile not in ('balanced','compact','maximum','custom'):raise ValueError('Неизвестный профиль')
+        out['smart']={'min_size':min_size,'max_size':max_size,'min_seeders':min_seeders,
+                      'quality':quality,'strict':bool(prefs.get('strict',out['smart']['strict'])),'profile':profile}
     if 'search' in body:
         s=body['search'];out['search']['enable_prowlarr']=False
         for key,minimum,maximum in (('cache_minutes',1,60),('cache_max',50,1000)):
