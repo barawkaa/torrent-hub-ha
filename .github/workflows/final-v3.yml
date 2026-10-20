@@ -102,6 +102,7 @@ jobs:
       - name: Verify anonymous pull
         if: success()
         run: |
+          docker rm -f th-v3 || true
           docker logout ghcr.io || true
           docker image rm ghcr.io/barawkaa/torrent-hub-ha:3.0.0
           docker pull ghcr.io/barawkaa/torrent-hub-ha:3.0.0
