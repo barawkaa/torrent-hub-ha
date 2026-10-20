@@ -4,7 +4,6 @@ const {JSDOM}=require('jsdom');
 const html=fs.readFileSync('torrent-hub/app/static/index.html','utf8');
 const cfg={
   version:3,proxy:{mode:'direct',type:'socks5',host:'',port:0,username:'',password_set:false},
-  remote:{username:'admin',password_set:false},
   smart:{min_size:5,max_size:10,min_seeders:10,quality:'1080',strict:false,profile:'balanced'},
   search:{include_public:true,cache_minutes:10,cache_max:350},
   direct_trackers:[
@@ -23,7 +22,6 @@ function fakeFetch(url,options={}){
  if(path==='config'&&method==='PUT'){
   for(const [key,value] of Object.entries(data.config)){
    cfg[key]=value;
-   if(key==='remote'){cfg.remote.password_set=!!value.password;delete cfg.remote.password;}
   }
   return Promise.resolve({ok:true,json:()=>Promise.resolve(cfg)});
  }
@@ -72,9 +70,8 @@ function change(id,value){
  assert.equal(cfg.direct_trackers.length,4);
  d.getElementById('saveDirect').click();await wait(50);
  assert.ok(requests.some(x=>x.path==='config'&&x.method==='PUT'));
- d.getElementById('remoteUser').value='operator';d.getElementById('remotePass').value='strongpassword123';
- d.getElementById('saveRemote').click();await wait(50);
- assert.ok(cfg.remote.password_set);
- console.log('PASS: smart ranking, sliders, custom tracker editor, grouped diagnostics, remote login setup');
+ assert.equal(d.querySelector('[data-tab="access"]'),null);
+ assert.equal(d.getElementById('remotePass'),null);
+ console.log('PASS: smart ranking, sliders, custom tracker editor, grouped diagnostics, password-free local interface');
  dom.window.close();
 })().catch(e=>{console.error(e);dom.window.close();process.exitCode=1});
