@@ -2,9 +2,7 @@
 import asyncio
 import uvicorn
 from main import app
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-import os
+from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from gateway import external_app
 
@@ -13,15 +11,9 @@ async def ingress_lifespan(_):
     async with app.router.lifespan_context(app):
         yield
 
+# The ingress backend is not mapped to a host port; HA Supervisor is
+# responsible for authentication and forwarding. Never pin its peer IP.
 ingress_app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None,lifespan=ingress_lifespan)
-
-@ingress_app.middleware('http')
-async def supervisor_only(request:Request,call_next):
-    # In HA production this listener is exclusively for the Supervisor proxy.
-    if (os.getenv('SUPERVISOR_TOKEN') or os.getenv('HASSIO_TOKEN')) and request.client and request.client.host != '172.30.32.2':
-        return JSONResponse({'detail':'Ingress доступен только через Home Assistant'},status_code=403)
-    return await call_next(request)
-
 ingress_app.mount('/',app)
 
 async def run():

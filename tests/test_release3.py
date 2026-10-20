@@ -66,13 +66,13 @@ def test_lan_port_only_allows_origins(monkeypatch,isolated):
         assert client.get("/api/storage").status_code==200
 
 
-def test_ingress_only_from_supervisor(monkeypatch,isolated):
+def test_ingress_backend_works_with_supervisor_token(monkeypatch,isolated):
+    # The backend receives authenticated requests forwarded by Supervisor.
+    # A fixed Supervisor peer IP is not portable and must not block ingress.
     monkeypatch.setenv("SUPERVISOR_TOKEN","test-token")
     with TestClient(serve.ingress_app) as c:
-        assert c.get("/api/config").status_code==403
-    monkeypatch.delenv("SUPERVISOR_TOKEN")
-    with TestClient(serve.ingress_app) as c:
         assert c.get("/api/config").status_code==200
+    monkeypatch.delenv("SUPERVISOR_TOKEN")
 
 
 def test_smart_settings_saved_and_range_validation(isolated):
