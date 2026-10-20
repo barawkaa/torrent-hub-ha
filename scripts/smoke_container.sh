@@ -5,7 +5,7 @@ NAME="torrent-hub-ci-smoke"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 trap 'docker logs --tail 80 "$NAME" || true; docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
 docker run -d --name "$NAME" -p 18765:8765 --tmpfs /data:rw,size=512m "$IMAGE" >/dev/null
-for n in $(seq 1 30); do
+for n in $(seq 1 9); do
   if ! docker inspect --format '{{.State.Running}}' "$NAME" 2>/dev/null | grep -q true; then
     echo "Container exited before passing checks"; exit 1
   fi
@@ -28,9 +28,13 @@ assert any(x.get("enable") and x.get("name","").lower() in ("rutor","megapeer","
       fi
     fi
   fi
-  sleep 3
+  sleep 2
 done
 echo 'FAIL: Prowlarr catalog or automatic tracker setup did not become ready'
+echo '--- API diagnosis ---'
+curl -fsS --max-time 3 http://127.0.0.1:18765/api/status || true
+echo '\n--- configured indexers ---'
+curl -fsS --max-time 3 http://127.0.0.1:18765/api/indexers || true
 docker logs --tail 100 "$NAME" || true
 docker exec "$NAME" sh -c 'tail -120 /data/torrent-hub/engine.log' || true
 exit 1
