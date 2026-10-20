@@ -38,7 +38,10 @@ jobs:
           unzip -t "$APK" >/dev/null
           ls -lh "$APK"
           cp "$APK" torrent-hub-android-1.0.0-rc1.apk
-          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep 'Alias name'
+          test -f "$HOME/.android/debug.keystore"
+          apksigner=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -1)
+          test -n "$apksigner"
+          "$apksigner" verify --verbose "$APK"
       - uses: actions/upload-artifact@v4
         with:
           name: Torrent-Hub-Android-TV-APK
