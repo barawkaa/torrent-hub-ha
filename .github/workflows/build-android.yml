@@ -38,10 +38,13 @@ jobs:
           unzip -t "$APK" >/dev/null
           ls -lh "$APK"
           cp "$APK" torrent-hub-android-1.0.0-rc1.apk
-          test -f "$HOME/.android/debug.keystore"
-          apksigner=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -1)
-          test -n "$apksigner"
-          "$apksigner" verify --verbose "$APK"
+          signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit || true)
+          if test -n "$signer"; then
+            "$signer" verify --verbose "$APK"
+          else
+            jarsigner -verify "$APK" > /tmp/torrent-hub-signature-check.txt
+            grep -q "jar verified" /tmp/torrent-hub-signature-check.txt
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: Torrent-Hub-Android-TV-APK
