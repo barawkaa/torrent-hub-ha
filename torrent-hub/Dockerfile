@@ -8,4 +8,4 @@ COPY requirements.txt /app/requirements.txt
 RUN pip3 install --no-cache-dir -r requirements.txt
 COPY app/ /app/
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python3 -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8765/healthz',timeout=3)"
-CMD ["python3","-m","uvicorn","main:app","--host","0.0.0.0","--port","8765"]
+CMD ["python3","/app/serve.py"]

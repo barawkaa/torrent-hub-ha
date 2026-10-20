@@ -1,0 +1,19 @@
+{
+  "name": "Torrent Hub",
+  "short_name": "Torrent Hub",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "description": "Прямой поиск торрент-раздач на личном сервере Home Assistant",
+  "lang": "ru",
+  "background_color": "#09111e",
+  "theme_color": "#09111e",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
