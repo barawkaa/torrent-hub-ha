@@ -7,9 +7,13 @@ such changes are surfaced as explicit provider errors.
 from __future__ import annotations
 import re
 from datetime import datetime
-from urllib.parse import quote, urljoin, quote_from_bytes
+import asyncio
+import hashlib
+import time
+from urllib.parse import urlencode, urlsplit, urljoin, quote, quote_from_bytes
+import httpx
 from bs4 import BeautifulSoup
-from core import fetch, result_of, magnet_hash, external_url_guard
+from core import fetch, result_of, magnet_hash, external_url_guard, proxy_address, choose_routes
 
 TRACKERS = {
     "rutor": {"name":"RuTor", "url":"https://rutor.info"},
@@ -187,6 +191,130 @@ def parse_custom(html: str, base: str, tracker: dict) -> list[dict]:
     return found
 
 
+
+# Session credentials never leave the server. Short-lived cookies live in RAM.
+_AUTH_CACHE = {}
+_AUTH_LOCKS = {}
+
+class TrackerLoginError(ValueError):
+    pass
+
+def invalidate_tracker_session(tracker_id: str):
+    for key in tuple(_AUTH_CACHE):
+        if key[0] == tracker_id:
+            _AUTH_CACHE.pop(key, None)
+
+def _cache_key(tracker: dict, password: str) -> tuple:
+    digest=hashlib.sha256(password.encode("utf8")).hexdigest()
+    return (str(tracker.get("id")),str(tracker.get("url")),str(tracker.get("username","")),digest,
+            str(tracker.get("route","inherit")))
+
+def _check_blocked(text: str):
+    page=text.lower()
+    if any(k in page for k in ("cf-challenge","just a moment","checking your browser","cloudflare ray id","error 1020")):
+        raise TrackerLoginError("Сайт требует проверку Cloudflare. Попробуй другое зеркало или маршрут через прокси.")
+    if any(k in page for k in ("cap_sid","captcha","капч","код с картинки","g-recaptcha")):
+        raise TrackerLoginError("Сайт запросил капчу. Автоматический вход сейчас невозможен.")
+
+async def _same_host_request(client, method, url, base, **kwargs):
+    host=urlsplit(base).hostname
+    for _ in range(5):
+        if urlsplit(url).hostname != host or urlsplit(url).scheme not in ("https","http"):
+            raise TrackerLoginError("Трекер перенаправил авторизацию на другой домен: проверь адрес зеркала")
+        response=await client.request(method,url,follow_redirects=False,**kwargs)
+        if response.status_code not in (301,302,303,307,308):
+            response.raise_for_status()
+            return response
+        location=response.headers.get("location")
+        if not location:
+            raise TrackerLoginError("Ошибка входа: перенаправление без адреса")
+        url=urljoin(str(response.url),location)
+        if response.status_code in (301,302,303):
+            method="GET";kwargs.pop("content",None);kwargs.pop("data",None)
+    raise TrackerLoginError("Слишком много перенаправлений при входе")
+
+def _is_logged_in(kind: str, page: str) -> bool:
+    lower=page.lower()
+    if kind=="kinozal":
+        return "logout.php?hash4u=" in lower or "logout.php?hash=" in lower
+    # RuTracker exposes an account marker when signed in.
+    if "logged-in-as-cap" in lower:
+        return True
+    return bool(re.search(r"\bIS_GUEST\s*:\s*(?:!!\s*['\"]0['\"]|false|0)\b",page,re.I))
+
+def _cookie_header(client, base:str) -> str:
+    host=urlsplit(base).hostname or ""
+    result=[]
+    for cookie in client.cookies.jar:
+        domain=cookie.domain.lstrip(".")
+        if host==domain or host.endswith("."+domain):
+            result.append(cookie.name+"="+cookie.value)
+    return "; ".join(result)
+
+async def login_tracker(tracker:dict, proxy:dict, *, force:bool=False) -> str:
+    """Authenticate via actual tracker POST form and verify account before caching.
+
+    Never assume that a successful HTTP response or presence of a cookie means login.
+    """
+    kind=tracker.get("kind")
+    if kind not in ("rutracker","kinozal"):
+        raise TrackerLoginError("Для этого источника авторизация не требуется")
+    base=str(tracker.get("url","")).rstrip("/")
+    external_url_guard(base)
+    user=str(tracker.get("username","")).strip()
+    pwd=str(tracker.get("password",""))
+    if not user or not pwd:
+        raise TrackerLoginError("Введи логин и пароль от "+tracker.get("name",kind))
+    key=_cache_key(tracker,pwd)
+    now=time.monotonic()
+    if not force and key in _AUTH_CACHE and now-_AUTH_CACHE[key][0]<600:
+        return _AUTH_CACHE[key][1]
+    lock=_AUTH_LOCKS.setdefault(tracker.get("id",kind),asyncio.Lock())
+    async with lock:
+        if not force and key in _AUTH_CACHE and time.monotonic()-_AUTH_CACHE[key][0]<600:
+            return _AUTH_CACHE[key][1]
+        errors=[]
+        for route in choose_routes(proxy,tracker.get("route","inherit")):
+            px=proxy_address(proxy) if route=="proxy" else None
+            try:
+                async with httpx.AsyncClient(proxy=px,timeout=httpx.Timeout(25,connect=8),
+                                             trust_env=False,follow_redirects=False,
+                                             headers=COMMON_HEADERS) as client:
+                    if kind=="rutracker":
+                        login_url=base+"/forum/login.php"
+                        check_url=base+"/forum/tracker.php"
+                        params={"login_username":user,"login_password":pwd,"login":"Вход"}
+                    else:
+                        login_url=base+"/takelogin.php"
+                        check_url=base+"/my.php"
+                        params={"username":user,"password":pwd}
+                    # GET establishes any site cookies before submitting credentials.
+                    landing=await _same_host_request(client,"GET",base+("/forum/login.php" if kind=="rutracker" else "/login.php"),base)
+                    _check_blocked(landing.text)
+                    if landing.status_code in (401,403):
+                        raise TrackerLoginError("Сайт запретил вход (HTTP "+str(landing.status_code)+")")
+                    posted=await _same_host_request(client,"POST",login_url,base,
+                        content=urlencode(params,encoding="cp1251").encode("ascii"),
+                        headers={"Content-Type":"application/x-www-form-urlencoded"})
+                    _check_blocked(posted.text)
+                    checked=await _same_host_request(client,"GET",check_url,base)
+                    _check_blocked(checked.text)
+                    if not _is_logged_in(kind,checked.text):
+                        raise TrackerLoginError("Сайт не подтвердил вход. Проверь логин/пароль; возможно, требуется капча.")
+                    cookies=_cookie_header(client,base)
+                    if not cookies:
+                        raise TrackerLoginError("Сайт подтвердил вход, но не выдал Cookie сессии")
+                    _AUTH_CACHE[key]=(time.monotonic(),cookies)
+                    return cookies
+            except TrackerLoginError as exc:
+                errors.append(str(exc))
+                if "капчу" in str(exc) or "Cloudflare" in str(exc) or "не подтвердил вход" in str(exc):
+                    break
+            except (httpx.HTTPError,ValueError) as exc:
+                errors.append("Соединение: "+type(exc).__name__+" — "+str(exc)[:85])
+        raise TrackerLoginError("; ".join(errors) or "Не удалось авторизоваться")
+
+
 PARSERS={"rutor":parse_rutor,"megapeer":parse_megapeer,"nnmclub":parse_nnmclub,"rutracker":parse_rutracker,"kinozal":parse_kinozal}
 
 async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
@@ -196,8 +324,10 @@ async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
     external_url_guard(base)
     route=tracker.get("route","inherit")
     cookie=str(tracker.get("cookie","") or "").strip()
+    if kind in ("rutracker","kinozal") and tracker.get("username") and tracker.get("password"):
+        cookie=await login_tracker(tracker,proxy)
     if kind in ("rutracker","kinozal") and not cookie:
-        raise ValueError(tracker.get("name",kind)+": укажи Cookie своего аккаунта")
+        raise TrackerLoginError("Сначала нажми «Подключить» и введи логин и пароль")
     auth_headers={**COMMON_HEADERS,**({"Cookie":cookie} if cookie else {})}
     if kind=="custom":
         pattern=str(tracker.get("adapter",{}).get("path",""))
@@ -227,6 +357,13 @@ async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
             {"f[]":"-1","o":"10","s":"0","tm":"-1","shf":"1","sha":"1","ta":"-1","sns":"-1","sds":"4","nm":query,"submit":"Поиск"},encoding="cp1251").encode("ascii"),
                             headers={**auth_headers,"Content-Type":"application/x-www-form-urlencoded"},timeout=24)
         html=response.content.decode("cp1251",errors="replace")
+    if kind in ("rutracker","kinozal") and tracker.get("username") and tracker.get("password"):
+        # Authenticated tracker sometimes silently returns the login form instead of results.
+        if 'login_username' in html or 'name="password"' in html and 'takelogin.php' in html:
+            invalidate_tracker_session(tracker.get("id",kind))
+            cookie=await login_tracker(tracker,proxy,force=True)
+            response=await fetch(proxy,route,url,timeout=24,headers={**COMMON_HEADERS,"Cookie":cookie})
+            html=response.content.decode("cp1251",errors="replace")
     items=parse_custom(html,base,tracker) if kind=="custom" else PARSERS[kind](html,base)
     for item in items:
         item["source_id"]=tracker.get("id",kind)
