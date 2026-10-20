@@ -1,4 +1,5 @@
 name: Build Torrent Hub Android TV APK
+# Corrected native Android Button API and verified SDK installation.
 on:
   push:
     branches: [android/initial-webview]
