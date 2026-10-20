@@ -20,7 +20,7 @@
 </div>
 <div id="smartResults"></div>
 </section>
-<section id="tab-indexers" class="page"><div class="panel"><h2>Прямой поиск по трекерам</h2><p class="muted">Без базы: каждая раздача ищется непосредственно на трекере при запросе. Агрегаторы независимы и необязательны.</p><div id="directTrackerRows"></div><div class="toolbar foot"><button class="btn primary" id="saveDirect">Сохранить</button><button class="btn" id="checkDirect">Проверить поисковую выдачу</button></div><p id="directTrackerMessage" class="msg"></p><details><summary>Как добавить собственный источник</summary><p class="muted">Для уже поддерживаемого сайта можно указать своё зеркало. Для другого формата сайта нужен адаптер разбора. Совместимые JacRed/Torznab API добавляются во вкладке «Агрегаторы».</p></details></div><div hidden><div id="engineState"></div><button id="loadCatalog"></button><button id="reloadIndexers"></button><button id="testIndexers"></button><button id="searchIndexer"></button><input id="indexerQuery"><div id="catalog"></div><div id="extendedCatalog"></div><div id="indexerList"></div></div></section>
+<section id="tab-indexers" class="page"><div class="panel"><h2>Прямой поиск по трекерам</h2><p class="muted">Без базы: каждая раздача ищется непосредственно на трекере при запросе. Агрегаторы независимы и необязательны.</p><div id="directTrackerRows"></div><div class="toolbar foot"><button class="btn primary" id="saveDirect">Сохранить</button><button class="btn" id="addCustomTracker">+ Добавить трекер</button><button class="btn" id="checkDirect">Проверить поисковую выдачу</button></div><p id="directTrackerMessage" class="msg"></p><details><summary>Как добавить собственный источник</summary><p class="muted">Для уже поддерживаемого сайта можно указать своё зеркало. Для другого формата сайта нужен адаптер разбора. Совместимые JacRed/Torznab API добавляются во вкладке «Агрегаторы».</p></details></div><div hidden><div id="engineState"></div><button id="loadCatalog"></button><button id="reloadIndexers"></button><button id="testIndexers"></button><button id="searchIndexer"></button><input id="indexerQuery"><div id="catalog"></div><div id="extendedCatalog"></div><div id="indexerList"></div></div></section>
 <section id="tab-sources" class="page"><div class="flex between"><div><h2>Дополнительные агрегаторы</h2><p class="muted">Подключённые агрегаторы участвуют в обычном поиске автоматически. При недоступности одного другие продолжают работать. Можно добавлять JacRed, Torznab и Knaben API.</p></div><button class="btn" id="addSource">+ Добавить</button></div><div id="sources"></div><div class="toolbar"><button class="btn primary" id="saveSources">Сохранить источники</button><span class="msg" id="sourceMsg"></span></div></section>
 <section id="tab-servers" class="page"><div class="flex between"><div><h2>Мои TorrServer</h2><p class="muted">Можно добавлять и удалять без ограничений для двух текущих устройств.</p></div><button class="btn" id="addServer">+ Добавить</button></div><div id="servers"></div><div class="toolbar"><button class="btn primary" id="saveServers">Сохранить серверы</button><span class="msg" id="serverMsg"></span></div><div class="panel"><h3>Библиотека выбранного TorrServer</h3><div class="toolbar"><select id="libraryServer"></select><button class="btn" id="loadLibrary">Показать библиотеку</button></div><div id="library" class="list muted">Список хранится в каждом TorrServer отдельно.</div></div></section>
 <section id="tab-network" class="page"><div class="panel"><h2>Сетевые настройки</h2><p class="muted">Любой совместимый HTTP или SOCKS5-прокси, с логином и паролем либо без. Локальные TorrServer не проксируются.</p><div class="two"><div class="field"><label>Маршрут</label><select id="mode"><option value="proxy">Только через прокси — без прямого обхода</option><option value="direct">Напрямую</option><option value="auto">Сначала напрямую, при ошибке через прокси*</option></select></div><div class="field"><label>Тип прокси</label><select id="type"><option value="socks5">SOCKS5</option><option value="http">HTTP</option></select></div><div class="field"><label>Хост</label><input id="proxyHost" placeholder="192.168.1.100"></div><div class="field"><label>Порт</label><input id="proxyPort" type="number" min="1" max="65535"></div><div class="field"><label>Логин</label><input id="proxyUser" autocomplete="off"></div><div class="field"><label>Пароль (пустое — сохранить старый)</label><input id="proxyPass" type="password" autocomplete="new-password"></div></div><p class="note foot">* Маршрут применим и к прямым трекерам, и к агрегаторам; без прямого обхода в режиме «Только через прокси».</p><div class="toolbar foot"><button class="btn primary" id="saveProxy">Сохранить прокси</button><button class="btn" id="testProxy">Проверить введённые данные</button><button class="btn" id="testSavedProxy">Проверить сохранённое соединение</button></div><div id="proxyMsg" class="msg"></div><div id="proxySavedInfo" class="muted"></div><p class="muted">Проверка использует поля прямо с экрана и <b>не сбрасывает несохранённые изменения</b>.</p></div></section>
@@ -32,7 +32,22 @@
 <div id="remoteInfo" class="msg"></div><p class="muted">После задания пароля открой в локальной сети <code>http://192.168.1.100:8766</code>, а затем настроенный HTTPS-домен Keenetic. Для Android добавь сайт на главный экран через Chrome.</p>
 </div></section>
 <section id="tab-health" class="page"><div class="panel"><h2>Временный кеш</h2><p class="muted" id="cacheStatus"></p><div class="toolbar"><label>Минут <input id="cacheMinutes" type="number" min="1" max="60" value="10"></label><label>Максимум результатов <input id="cacheMax" type="number" min="50" max="1000" value="350"></label><button class="btn" id="saveCache">Сохранить</button><button class="btn danger" id="clearCache">Очистить кеш</button></div><p class="muted">Кеш только в оперативной памяти. База на диске не создаётся.</p><hr><h3>Данные предыдущей версии</h3><p class="muted" id="legacyStatus">Проверяю старые файлы...</p><button class="btn danger" id="deleteLegacy">Очистить старые файлы Prowlarr</button><p class="tiny">Удаляется только каталог прежнего поискового движка. Настройки Torrent Hub и TorrServer остаются.</p></div><div class="panel"><div class="flex between"><h2>Доступность системы</h2><button class="btn" id="checkHealth">Проверить всё сейчас</button></div><p class="muted">Проверяем прямые трекеры, сетевой прокси, агрегаторы и TorrServer.</p><div id="healthGrid" class="cards"></div></div><div class="panel"><h2>Журнал</h2><div id="events" class="tiny"></div></div></section>
-</div><dialog id="indexerDialog" style="background:#142235;border:1px solid #42627a;color:#e8f2ff;border-radius:15px;padding:22px;max-width:660px;width:calc(100% - 24px);max-height:85vh;overflow:auto"><h2 id="indexerDialogTitle">Настроить трекер</h2><p class="muted">Заполни параметры, необходимые для работы. Для публичных трекеров обычно достаточно настроек по умолчанию.</p><div id="indexerConfigFields"></div><div class="toolbar foot"><button class="btn primary" id="submitIndexer">Добавить трекер</button><button class="btn" id="closeIndexer">Отмена</button></div><p class="msg" id="indexerDialogMsg"></p></dialog><dialog id="sendDialog" class="hub-dialog"><h2>Отправить на TorrServer</h2><p id="sendTitle" class="muted"></p><div id="sendChoices" class="choice-list"></div><div class="toolbar foot"><button class="btn" id="cancelSend">Отмена</button></div><div id="sendMessage" class="msg"></div></dialog><dialog id="downloadDialog" class="hub-dialog"><h2>Скачать .torrent</h2><p class="muted">Выбери место сохранения оригинального торрент-файла.</p><div class="choice-list"><button class="btn" id="downloadLocal">↓ На это устройство</button><button class="btn" id="downloadMedia">↓ В Home Assistant — /media/TorrentHub</button></div><p id="downloadMessage" class="msg"></p><div class="toolbar foot"><button class="btn" id="cancelDownload">Отмена</button></div></dialog><div id="toast" class="hidden"></div><script>
+</div><dialog class="hub-dialog" id="customDialog">
+<h2 id="customDialogTitle">Добавить источник</h2><p class="muted">Для публичного HTML-трекера можно задать CSS-селекторы. Это не подключает сайт с обязательной авторизацией автоматически.</p>
+<div class="two"><div class="field"><label>Название</label><input id="customName" placeholder="Мой трекер"></div>
+<div class="field"><label>URL сайта</label><input id="customUrl" placeholder="https://example.org"></div></div>
+<div class="field foot"><label>Путь поиска (используй {query})</label><input id="customPath" value="/search?q={query}"></div>
+<div class="two foot"><div class="field"><label>CSS: строка раздачи</label><input id="customRow" placeholder="table.results tr"></div>
+<div class="field"><label>CSS: название</label><input id="customTitle" placeholder="a.title"></div>
+<div class="field"><label>CSS: ссылка на страницу</label><input id="customDetails" placeholder="a.title"></div>
+<div class="field"><label>CSS: magnet</label><input id="customMagnet" placeholder='a[href^="magnet:"]'></div>
+<div class="field"><label>CSS: .torrent</label><input id="customDownload" placeholder="a.download"></div>
+<div class="field"><label>CSS: размер</label><input id="customSize" placeholder="td.size"></div>
+<div class="field"><label>CSS: раздающие</label><input id="customSeeders" placeholder="td.seeds"></div>
+<div class="field"><label>CSS: дата</label><input id="customDate" placeholder="td.date"></div></div>
+<div class="field foot"><label>Кодировка</label><select id="customEncoding"><option value="utf-8">UTF-8</option><option value="cp1251">Windows-1251</option></select></div>
+<div class="toolbar foot"><button class="btn primary" id="confirmCustom">Сохранить источник</button><button class="btn" id="closeCustom">Отмена</button></div>
+<div id="customError" class="msg"></div></dialog><dialog id="indexerDialog" style="background:#142235;border:1px solid #42627a;color:#e8f2ff;border-radius:15px;padding:22px;max-width:660px;width:calc(100% - 24px);max-height:85vh;overflow:auto"><h2 id="indexerDialogTitle">Настроить трекер</h2><p class="muted">Заполни параметры, необходимые для работы. Для публичных трекеров обычно достаточно настроек по умолчанию.</p><div id="indexerConfigFields"></div><div class="toolbar foot"><button class="btn primary" id="submitIndexer">Добавить трекер</button><button class="btn" id="closeIndexer">Отмена</button></div><p class="msg" id="indexerDialogMsg"></p></dialog><dialog id="sendDialog" class="hub-dialog"><h2>Отправить на TorrServer</h2><p id="sendTitle" class="muted"></p><div id="sendChoices" class="choice-list"></div><div class="toolbar foot"><button class="btn" id="cancelSend">Отмена</button></div><div id="sendMessage" class="msg"></div></dialog><dialog id="downloadDialog" class="hub-dialog"><h2>Скачать .torrent</h2><p class="muted">Выбери место сохранения оригинального торрент-файла.</p><div class="choice-list"><button class="btn" id="downloadLocal">↓ На это устройство</button><button class="btn" id="downloadMedia">↓ В Home Assistant — /media/TorrentHub</button></div><p id="downloadMessage" class="msg"></p><div class="toolbar foot"><button class="btn" id="cancelDownload">Отмена</button></div></dialog><div id="toast" class="hidden"></div><script>
 'use strict';const $=id=>document.getElementById(id);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let cfg, checks={}, records=[],cat=[],idx=[],indexerErrors=[],busy=false;let sourceSelections={};let activeJob='';
 async function api(path,method='GET',body){let r=await fetch('api/'+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});let d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.detail||r.status+' ошибка сервера');return d}
@@ -171,14 +186,62 @@ $('searchForm').onsubmit=async e=>{e.preventDefault();if(busy)return;busy=true;r
 
 function renderDirectTrackers(){
  if(!cfg||!$('directTrackerRows'))return;
- $('directTrackerRows').innerHTML=cfg.direct_trackers.map(t=>
- '<div class="item" data-direct="'+esc(t.id)+'"><div class="flex between"><b>'+esc(t.name)+'</b><label class="check"><input type="checkbox" class="v-enabled" '+(t.enabled?'checked':'')+'> Включён</label></div><div class="two foot"><div class="field"><label>Адрес / зеркало</label><input class="v-url" value="'+esc(t.url)+'"></div><div class="field"><label>Маршрут</label><select class="v-route">'+[['inherit','Общий'],['proxy','Через прокси'],['direct','Напрямую'],['auto','Авто']].map(o=>'<option value="'+o[0]+'" '+(t.route===o[0]?'selected':'')+'>'+o[1]+'</option>').join('')+'</select></div></div><div class="foot tracker-status">'+labelStatus(checks['tracker:'+t.id])+'</div><button class="btn small" data-check-tracker="'+esc(t.id)+'">Проверить</button></div>').join('');
+ $('directTrackerRows').innerHTML=cfg.direct_trackers.map(t=>{
+ const title=t.kind==='custom'?'<input class="v-name" value="'+esc(t.name)+'">':'<b>'+esc(t.name)+'</b>';
+ return '<div class="item" data-direct="'+esc(t.id)+'"><div class="flex between">'+title+
+ '<label class="check"><input type="checkbox" class="v-enabled" '+(t.enabled?'checked':'')+'> Включён</label></div>'+
+ '<div class="two foot"><div class="field"><label>Адрес / зеркало</label><input class="v-url" value="'+esc(t.url)+'"></div>'+
+ '<div class="field"><label>Маршрут</label><select class="v-route">'+[['inherit','Общий'],['proxy','Через прокси'],['direct','Напрямую'],['auto','Авто']].map(o=>'<option value="'+o[0]+'" '+(t.route===o[0]?'selected':'')+'>'+o[1]+'</option>').join('')+'</select></div></div>'+
+ '<div class="foot tracker-status">'+labelStatus(checks['tracker:'+t.id])+'</div>'+
+ '<div class="toolbar"><button class="btn small" data-check-tracker="'+esc(t.id)+'">Проверить</button>'+
+ (t.kind==='custom'?'<button class="btn small" data-edit-custom="'+esc(t.id)+'">Шаблон поиска</button><button class="btn small danger" data-remove-custom="'+esc(t.id)+'">Удалить</button>':'')+
+ '</div></div>'}).join('');
 }
-function draftTrackers(){return cfg.direct_trackers.map(t=>{let e=[...document.querySelectorAll('[data-direct]')].find(el=>el.dataset.direct===t.id);return {...t,enabled:e.querySelector('.v-enabled').checked,url:e.querySelector('.v-url').value.trim(),route:e.querySelector('.v-route').value}})}
+function draftTrackers(){return cfg.direct_trackers.map(t=>{
+ let el=[...document.querySelectorAll('[data-direct]')].find(x=>x.dataset.direct===t.id);
+ return {...t,name:el.querySelector('.v-name')?.value||t.name,enabled:el.querySelector('.v-enabled').checked,
+ url:el.querySelector('.v-url').value.trim(),route:el.querySelector('.v-route').value}
+})}
+let customEditingId=null;
+function openCustom(t){
+ customEditingId=t?.id||null;
+ const adapter=t?.adapter||{};
+ $('customDialogTitle').textContent=t?'Настроить '+t.name:'Добавить собственный трекер';
+ for(const key of ['Name','Url']) $('custom'+key).value=t?.[key.toLowerCase()]||'';
+ for(const key of ['Path','Row','Title','Details','Magnet','Download','Size','Seeders','Date'])
+    $('custom'+key).value=adapter[key.toLowerCase()]|| (key==='Path'?'/search?q={query}':'');
+ $('customEncoding').value=adapter.encoding||'utf-8';
+ $('customError').textContent='';
+ $('customDialog').showModal();
+}
+$('addCustomTracker').onclick=()=>{cfg.direct_trackers=draftTrackers();openCustom(null)};
+$('closeCustom').onclick=()=>$('customDialog').close();
+$('confirmCustom').onclick=()=>{
+ try{
+ let name=$('customName').value.trim(),url=$('customUrl').value.trim();
+ if(!name||!url)throw Error('Укажи название и URL');
+ const adapter={};
+ for(const key of ['Path','Row','Title','Details','Magnet','Download','Size','Seeders','Date'])
+    adapter[key.toLowerCase()]=$('custom'+key).value.trim();
+ adapter.encoding=$('customEncoding').value;
+ if(!adapter.row||!adapter.title||!adapter.path.includes('{query}'))throw Error('Обязательны CSS строки, название и путь с {query}');
+ let record=customEditingId?cfg.direct_trackers.find(t=>t.id===customEditingId):null;
+ if(record){Object.assign(record,{name,url,adapter})}
+ else {cfg.direct_trackers.push({id:'custom-'+newID().slice(0,12),name,kind:'custom',url,adapter,route:'inherit',enabled:true})}
+ $('customDialog').close();renderDirectTrackers();$('directTrackerMessage').textContent='Нажми «Сохранить», затем «Проверить»';
+ }catch(e){$('customError').textContent=e.message}
+};
+
 $('saveDirect').onclick=async()=>{if(await save({direct_trackers:draftTrackers()},'directTrackerMessage')){renderDirectTrackers();renderSearchProviders()}};
 async function checkOne(t){try{let r=await api('test','POST',{category:'tracker',id:t.id,draft:t});checks['tracker:'+t.id]=r.result}catch(e){toast(e.message,true)}}
 $('checkDirect').onclick=async()=>{await Promise.all(draftTrackers().filter(x=>x.enabled).map(checkOne));renderDirectTrackers();renderHealth()};
-$('directTrackerRows').onclick=async e=>{let button=e.target.closest('[data-check-tracker]');if(!button)return;button.disabled=true;await checkOne(draftTrackers().find(t=>t.id===button.dataset.checkTracker));renderDirectTrackers();renderHealth()};
+$('directTrackerRows').onclick=async e=>{
+ let edit=e.target.closest('[data-edit-custom]'),del=e.target.closest('[data-remove-custom]');
+ if(edit){cfg.direct_trackers=draftTrackers();openCustom(cfg.direct_trackers.find(t=>t.id===edit.dataset.editCustom));return}
+ if(del){if(!confirm('Удалить пользовательский трекер?'))return;cfg.direct_trackers=draftTrackers().filter(t=>t.id!==del.dataset.removeCustom);renderDirectTrackers();return}
+ let b=e.target.closest('[data-check-tracker]');if(!b)return;
+ b.disabled=true;await checkOne(draftTrackers().find(t=>t.id===b.dataset.checkTracker));renderDirectTrackers();renderHealth()
+};
 async function updateLegacyStatus(){try{let d=await api('storage');$('legacyStatus').textContent=d.legacy_prowlarr_bytes?'Старый Prowlarr: '+(d.legacy_prowlarr_bytes/1048576).toFixed(2)+' МБ':'Старых данных Prowlarr нет';$('deleteLegacy').disabled=!d.legacy_prowlarr_bytes}catch(e){$('legacyStatus').textContent=e.message}}
 $('deleteLegacy').onclick=async()=>{if(!confirm('Удалить файлы старого Prowlarr? Настройки Torrent Hub сохранятся.'))return;try{let r=await api('storage/legacy-prowlarr','DELETE');toast('Освобождено '+(r.bytes_deleted/1048576).toFixed(2)+' МБ');await updateLegacyStatus()}catch(e){toast(e.message,true)}};
 async function updateCacheStatus(){try{let c=await api('cache');$('cacheStatus').textContent=c.results+' раздач в памяти; приблизительно '+(c.bytes_estimate/1024).toFixed(1)+' КБ. На диске база: 0 Б.';$('cacheMinutes').value=c.ttl_minutes;$('cacheMax').value=c.max_results}catch(e){$('cacheStatus').textContent=e.message}}
