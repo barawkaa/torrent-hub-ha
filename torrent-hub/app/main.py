@@ -56,7 +56,6 @@ def defaults():
                 {'id':'lg','name':'LG — приставка','url':'http://192.168.1.148:8090','username':'','password':''},
                 {'id':'ha','name':'Home Assistant','url':'http://192.168.1.100:8090','username':'','password':''}],
             'search':{'enable_prowlarr':False,'check_interval':900,'max_results':300,'remember_history':False,'include_public':True,'cache_minutes':10,'cache_max':350},
-            'remote':{'username':'admin','password_salt':'','password_hash':''},
             'smart':{'min_size':5,'max_size':10,'min_seeders':10,'quality':'all','strict':False,'profile':'balanced'},
             'direct_trackers':[{'id':k,'kind':k,'name':v['name'],'url':v['url'],'enabled':not bool(v.get('requires_auth')),'route':'inherit','cookie':''} for k,v in TRACKERS.items()]}
 
@@ -76,7 +75,7 @@ def load():
             value.setdefault('search',{}).update({'enable_prowlarr':False})
             value['search'].setdefault('cache_minutes',10)
             value['search'].setdefault('cache_max',350)
-            value.setdefault('remote',defaults()['remote'])
+            value.pop('remote',None)
             value.setdefault('smart',defaults()['smart'])
             value.setdefault('direct_trackers',defaults()['direct_trackers'])
             if value.get('version',1)<4:
@@ -108,9 +107,6 @@ def redacted():
     out['proxy']['password_set']=bool(out['proxy'].pop('password',''))
     for tracker in out.get('direct_trackers',[]):
         tracker['cookie_set']=bool(tracker.pop('cookie',''))
-    out.setdefault('remote',defaults()['remote'])
-    out['remote']['password_set']=bool(out['remote'].pop('password_hash',''))
-    out['remote'].pop('password_salt',None)
     for source in out['sources']:
         source['api_key_set']=bool(source.pop('api_key',''))
     for server in out['servers']:
@@ -520,21 +516,6 @@ def update_config(old,body):
                     raise ValueError('Поддерживаются UTF-8 и Windows-1251')
             arr.append(record)
         out['direct_trackers']=arr
-    if 'remote' in body:
-        access=body['remote']
-        if not isinstance(access,dict):raise ValueError('Неправильные настройки доступа')
-        username=str(access.get('username',out['remote'].get('username','admin'))).strip()
-        if not re.fullmatch(r'[a-zA-Z0-9_.-]{3,40}',username):raise ValueError('Логин: 3–40 латинских символов, цифр, точек или дефисов')
-        out['remote']['username']=username
-        if access.get('password'):
-            password=str(access['password'])
-            if len(password)<12 or len(password)>128:raise ValueError('Пароль внешнего доступа: 12–128 символов')
-            salt=secrets.token_bytes(16)
-            out['remote']['password_salt']=salt.hex()
-            out['remote']['password_hash']=hashlib.scrypt(password.encode(),salt=salt,n=16384,r=8,p=1,dklen=32).hex()
-        if access.get('disable'):
-            out['remote']['password_salt']=''
-            out['remote']['password_hash']=''
     if 'smart' in body:
         prefs=body['smart']
         if not isinstance(prefs,dict):raise ValueError('Неверные параметры умного поиска')
