@@ -15,6 +15,8 @@ TRACKERS = {
     "rutor": {"name":"RuTor", "url":"https://rutor.info"},
     "megapeer": {"name":"MegaPeer", "url":"https://megapeer.vip"},
     "nnmclub": {"name":"NNM-Club", "url":"https://nnmclub.to"},
+    "rutracker": {"name":"RuTracker", "url":"https://rutracker.org", "requires_auth":True},
+    "kinozal": {"name":"Kinozal", "url":"https://kinozal.me", "requires_auth":True},
 }
 SIZE_UNITS={"b":1,"kb":1024,"mb":1048576,"gb":1073741824,"tb":1099511627776,
             "байт":1,"кб":1024,"мб":1048576,"гб":1073741824,"тб":1099511627776}
@@ -115,6 +117,41 @@ def parse_nnmclub(html:str,base:str)->list[dict]:
     return result
 
 
+def parse_rutracker(html:str,base:str)->list[dict]:
+    ensure_document(html,"RuTracker")
+    soup=BeautifulSoup(html,"html.parser")
+    results=[]
+    for row in soup.select("tr"):
+        title=row.select_one("a.tLink")
+        if title is None:continue
+        torrent=row.select_one('a[href*="dl.php?t="]')
+        size=row.select_one("td.tor-size")
+        seeds=row.select_one("b.seedmed")
+        results.append(make_row(title.get_text(" ",strip=True),"RuTracker",
+          urljoin(base+"/forum/",title.get("href","")),"",
+          urljoin(base+"/forum/",torrent.get("href","")) if torrent else "",
+          human_size(size.get_text(" ",strip=True)) if size else 0,
+          number(seeds.get_text(" ",strip=True)) if seeds else 0,""))
+    return results
+
+
+def parse_kinozal(html:str,base:str)->list[dict]:
+    ensure_document(html,"Kinozal")
+    soup=BeautifulSoup(html,"html.parser")
+    results=[]
+    for row in soup.select("tr"):
+        title=row.select_one('td.nam a[href*="details.php?"]')
+        if title is None:continue
+        cells=row.select("td")
+        info=title.get("href","")
+        results.append(make_row(title.get_text(" ",strip=True),"Kinozal",
+          urljoin(base,info),"",urljoin(base,info.replace("details.php?","download.php?")),
+          human_size(cells[3].get_text(" ",strip=True)) if len(cells)>3 else 0,
+          number(cells[4].get_text(" ",strip=True)) if len(cells)>4 else 0,
+          date_iso(cells[6].get_text(" ",strip=True)) if len(cells)>6 else ""))
+    return results
+
+
 def parse_custom(html: str, base: str, tracker: dict) -> list[dict]:
     """Declarative CSS selectors; no user-supplied Python/JS code is executed."""
     ensure_document(html, tracker.get("name","Custom"))
@@ -150,7 +187,7 @@ def parse_custom(html: str, base: str, tracker: dict) -> list[dict]:
     return found
 
 
-PARSERS={"rutor":parse_rutor,"megapeer":parse_megapeer,"nnmclub":parse_nnmclub}
+PARSERS={"rutor":parse_rutor,"megapeer":parse_megapeer,"nnmclub":parse_nnmclub,"rutracker":parse_rutracker,"kinozal":parse_kinozal}
 
 async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
     kind=str(tracker.get("kind","")).lower()
@@ -158,25 +195,37 @@ async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
     base=str(tracker.get("url","") or TRACKERS.get(kind,{}).get("url","")).rstrip("/")
     external_url_guard(base)
     route=tracker.get("route","inherit")
+    cookie=str(tracker.get("cookie","") or "").strip()
+    if kind in ("rutracker","kinozal") and not cookie:
+        raise ValueError(tracker.get("name",kind)+": укажи Cookie своего аккаунта")
+    auth_headers={**COMMON_HEADERS,**({"Cookie":cookie} if cookie else {})}
     if kind=="custom":
         pattern=str(tracker.get("adapter",{}).get("path",""))
         if not pattern.startswith("/") or pattern.startswith("//") or "{query}" not in pattern:
             raise ValueError("Адрес поиска: путь должен начинаться с / и содержать {query}")
         url=base+pattern.replace("{query}",quote_from_bytes(query.strip().encode(tracker.get("adapter",{}).get("encoding") or "utf-8")))
-        response=await fetch(proxy,route,url,timeout=24,headers=COMMON_HEADERS)
+        response=await fetch(proxy,route,url,timeout=24,headers=auth_headers)
         html=response.content.decode(tracker.get("adapter",{}).get("encoding","utf-8"),errors="replace")
     elif kind=="rutor":
         url=base+"/search/0/0/100/0/"+quote(query.strip(),safe="")
-        response=await fetch(proxy,route,url,timeout=24,headers=COMMON_HEADERS)
+        response=await fetch(proxy,route,url,timeout=24,headers=auth_headers)
         html=response.content.decode(response.encoding or "utf-8",errors="replace")
     elif kind=="megapeer":
         response=await fetch(proxy,route,base+"/browse.php?search="+quote_from_bytes(query.encode("cp1251"))+"&cat=0&stype=0&sort=0&ascdesc=0",
-                            timeout=24,headers=COMMON_HEADERS)
+                            timeout=24,headers=auth_headers)
+        html=response.content.decode("cp1251",errors="replace")
+    elif kind=="rutracker":
+        url=base+"/forum/tracker.php?nm="+quote_from_bytes(query.encode("cp1251"))
+        response=await fetch(proxy,route,url,timeout=24,headers=auth_headers)
+        html=response.content.decode("cp1251",errors="replace")
+    elif kind=="kinozal":
+        url=base+"/browse.php?s="+quote_from_bytes(query.encode("cp1251"))+"&g=0&c=0&v=0&d=0&w=0&t=0&f=0"
+        response=await fetch(proxy,route,url,timeout=24,headers=auth_headers)
         html=response.content.decode("cp1251",errors="replace")
     else:
         response=await fetch(proxy,route,base+"/forum/tracker.php",method="POST",content=__import__("urllib.parse",fromlist=["urlencode"]).urlencode(
             {"f[]":"-1","o":"10","s":"0","tm":"-1","shf":"1","sha":"1","ta":"-1","sns":"-1","sds":"4","nm":query,"submit":"Поиск"},encoding="cp1251").encode("ascii"),
-                            headers={**COMMON_HEADERS,"Content-Type":"application/x-www-form-urlencoded"},timeout=24)
+                            headers={**auth_headers,"Content-Type":"application/x-www-form-urlencoded"},timeout=24)
         html=response.content.decode("cp1251",errors="replace")
     items=parse_custom(html,base,tracker) if kind=="custom" else PARSERS[kind](html,base)
     for item in items:

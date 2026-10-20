@@ -157,7 +157,12 @@ async def fetch(proxy_cfg: dict, mode: str, url: str, *, params=None, method='GE
                 req_params=params
                 req_json=json
                 for _ in range(5):
-                    response=await client.request(verb,target,params=req_params,json=req_json,headers=headers,content=content)
+                    original_host=urllib.parse.urlsplit(url).hostname
+                    target_host=urllib.parse.urlsplit(target).hostname
+                    safe_headers=dict(headers or {})
+                    if original_host!=target_host:
+                        safe_headers={k:v for k,v in safe_headers.items() if k.lower() not in ('cookie','authorization','proxy-authorization')}
+                    response=await client.request(verb,target,params=req_params,json=req_json,headers=safe_headers,content=content)
                     if response.status_code not in (301,302,303,307,308):
                         response.raise_for_status()
                         return response
