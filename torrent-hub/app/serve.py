@@ -5,9 +5,15 @@ from main import app
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import os
+from contextlib import asynccontextmanager
 from gateway import external_app
 
-ingress_app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None)
+@asynccontextmanager
+async def ingress_lifespan(_):
+    async with app.router.lifespan_context(app):
+        yield
+
+ingress_app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None,lifespan=ingress_lifespan)
 
 @ingress_app.middleware('http')
 async def supervisor_only(request:Request,call_next):
