@@ -7,7 +7,7 @@ such changes are surfaced as explicit provider errors.
 from __future__ import annotations
 import re
 from datetime import datetime
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, quote_from_bytes
 from bs4 import BeautifulSoup
 from core import fetch, result_of, magnet_hash, external_url_guard
 
@@ -127,7 +127,7 @@ async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
         response=await fetch(proxy,route,url,timeout=24,headers=COMMON_HEADERS)
         html=response.content.decode(response.encoding or "utf-8",errors="replace")
     elif kind=="megapeer":
-        response=await fetch(proxy,route,base+"/browse.php",params={"search":query,"cat":"0","stype":"0","sort":"0","ascdesc":"0"},
+        response=await fetch(proxy,route,base+"/browse.php?search="+quote_from_bytes(query.encode("cp1251"))+"&cat=0&stype=0&sort=0&ascdesc=0",
                             timeout=24,headers=COMMON_HEADERS)
         html=response.content.decode("cp1251",errors="replace")
     else:
