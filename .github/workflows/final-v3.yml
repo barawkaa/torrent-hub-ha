@@ -1,7 +1,7 @@
-name: Final Torrent Hub 3.0 acceptance and ARM64 image
+name: Torrent Hub 3.0.1 LAN release checks
 on:
   push:
-    branches: [release/3.0-mobile-smart]
+    branches: [release/3.0.1-lan-no-login]
     paths:
       - '.github/workflows/final-v3.yml'
 permissions:
@@ -53,13 +53,13 @@ jobs:
           load: true
           push: false
           provenance: false
-          tags: ghcr.io/barawkaa/torrent-hub-ha:3.0.0
+          tags: ghcr.io/barawkaa/torrent-hub-ha:3.0.1
           build-args: |
-            BUILD_VERSION=3.0.0
+            BUILD_VERSION=3.0.1
       - name: Validate ingress, private gateway, direct live search and RAM cache
         timeout-minutes: 5
         run: |
-          docker run -d --name th-v3 --tmpfs /data:rw,size=64m -p 18765:8765 -p 18766:8766 ghcr.io/barawkaa/torrent-hub-ha:3.0.0
+          docker run -d --name th-v3 --tmpfs /data:rw,size=64m -p 18765:8765 -p 18766:8766 ghcr.io/barawkaa/torrent-hub-ha:3.0.1
           for n in $(seq 1 20); do
             if curl -fsS --max-time 3 http://127.0.0.1:18765/healthz >/dev/null; then break; fi
             sleep 2
@@ -73,11 +73,15 @@ jobs:
               q=urllib.request.Request(url,method=method,data=data,headers={'Content-Type':'application/json'})
               with urllib.request.urlopen(q,timeout=110) as r:return json.load(r)
           assert req(a+'/healthz')['ok']
+          assert req(b+'/api/config')['search']['enable_prowlarr'] is False
+          with urllib.request.urlopen(b+'/',timeout=10) as r:
+              assert r.status==200 and b'Torrent Hub' in r.read()
           try:
-              req(b+'/api/config')
-              raise AssertionError('Public unauthenticated API!')
-          except urllib.error.HTTPError as e:assert e.code==401
-          with urllib.request.urlopen(b+'/login',timeout=10) as r:assert r.status==200
+              req(b+'/login')
+              raise AssertionError('Legacy login page is still active')
+          except urllib.error.HTTPError as e:
+              assert e.code==404
+          with urllib.request.urlopen(b+'/icon.png',timeout=10) as r:assert r.status==200
           with urllib.request.urlopen(b+'/manifest.webmanifest',timeout=10) as r: assert 'application/' in r.headers['Content-Type']
           req(a+'/api/config','PUT',{'config':{'proxy':{'mode':'direct'}}})
           z=req(a+'/api/search','POST',{'query':'Титаник','include_public':False})
@@ -87,7 +91,7 @@ jobs:
           assert any(x['magnet'].startswith('magnet:?xt=') for x in z['items'] if x.get('magnet'))
           assert req(a+'/api/cache')['disk_database_bytes']==0
           assert req(a+'/api/cache','DELETE')['cache']['results']==0
-          print('PASS: no public unauthenticated API, live search without aggregators, RAM-only cache',flush=True)
+          print('PASS: local UI without password, live direct search, RAM-only cache',flush=True)
           PY
       - name: Publish only fully tested image
         if: success()
@@ -98,15 +102,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push verified version
         if: success()
-        run: docker push ghcr.io/barawkaa/torrent-hub-ha:3.0.0
+        run: docker push ghcr.io/barawkaa/torrent-hub-ha:3.0.1
       - name: Verify anonymous pull
         if: success()
         run: |
           docker rm -f th-v3 || true
           docker logout ghcr.io || true
-          docker image rm ghcr.io/barawkaa/torrent-hub-ha:3.0.0
-          docker pull ghcr.io/barawkaa/torrent-hub-ha:3.0.0
-          docker image inspect ghcr.io/barawkaa/torrent-hub-ha:3.0.0 --format '{{.Architecture}} {{index .Config.Labels "io.hass.version"}}'
+          docker image rm ghcr.io/barawkaa/torrent-hub-ha:3.0.1
+          docker pull ghcr.io/barawkaa/torrent-hub-ha:3.0.1
+          docker image inspect ghcr.io/barawkaa/torrent-hub-ha:3.0.1 --format '{{.Architecture}} {{index .Config.Labels "io.hass.version"}}'
       - name: Container logs on failure
         if: failure()
         run: docker logs --tail 80 th-v3 || true
