@@ -93,7 +93,7 @@ def test_user_supplied_css_adapter(isolated):
     item={"id":"custom-own","kind":"custom","name":"My indexer","url":"https://example.org",
           "route":"inherit","enabled":True,"adapter":adapter}
     newer=main.update_config(isolated,{"direct_trackers":isolated["direct_trackers"]+[item]})
-    assert len(newer["direct_trackers"])==4
+    assert len(newer["direct_trackers"])==6
     html='''<html><table><tr class="result"><td><a class="title" href="/torrent/1">Titanic 1080p</a>
     <a class="magnet" href="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567">Magnet</a>
     </td><td class="size">8 GB</td><td class="seed">100</td><td class="date">20.10.2026</td></tr></table></html>'''
@@ -120,3 +120,31 @@ def test_pwa_resources_and_sanitised_configuration(isolated):
         assert "smartMin" in response.text
         assert "remotePass" in response.text
         assert "CSS: название" in response.text
+
+
+def test_private_tracker_cookies_never_return_via_api(monkeypatch,isolated):
+    choices={t["id"]:t for t in isolated["direct_trackers"]}
+    assert set(("rutracker","kinozal")).issubset(choices)
+    assert not choices["rutracker"]["enabled"] and not choices["kinozal"]["enabled"]
+    choices["rutracker"]["cookie"]="bb_session=sensitive-cookie"
+    main.config=isolated
+    with TestClient(main.app) as c:
+        d=c.get("/api/config").json()
+        t=next(x for x in d["direct_trackers"] if x["id"]=="rutracker")
+        assert t["cookie_set"] and "cookie" not in t
+        all_sources=c.get("/api/direct-trackers").json()
+        assert "sensitive-cookie" not in json.dumps(all_sources)
+    new=main.update_config(isolated,{"direct_trackers":[{**t,"cookie":""} for t in isolated["direct_trackers"]]})
+    assert next(t for t in new["direct_trackers"] if t["id"]=="rutracker")["cookie"]=="bb_session=sensitive-cookie"
+    headers=main.tracker_download_headers({"source_id":"rutracker"},"https://rutracker.org/forum/dl.php?t=123")
+    assert headers["Cookie"]=="bb_session=sensitive-cookie"
+    assert main.tracker_download_headers({"source_id":"rutracker"},"https://attacker.example/file.torrent")=={}
+
+
+def test_rutracker_and_kinozal_html_parsers():
+    rut='<html><tr><td><a class="tLink" href="viewtopic.php?t=55">Film 1080p</a></td><td class="tor-size">8 GB</td><td><b class="seedmed">48</b></td><td><a href="dl.php?t=55">Download</a></td></tr></html>'
+    rz=direct.parse_rutracker(rut,"https://rutracker.org")
+    assert len(rz)==1 and rz[0]["seeders"]==48 and rz[0]["size"]>8_000_000_000
+    kin='<html><table><tr><td></td><td class="nam"><a href="/details.php?id=12">Film 4K</a></td><td></td><td>12 GB</td><td>100</td><td>0</td><td>20.10.2026</td></tr></table></html>'
+    kz=direct.parse_kinozal(kin,"https://kinozal.me")
+    assert len(kz)==1 and kz[0]["seeders"]==100 and "download.php" in kz[0]["download"]

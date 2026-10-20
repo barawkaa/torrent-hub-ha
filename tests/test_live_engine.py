@@ -34,8 +34,8 @@ def test_reject_bot_challenge():
 def test_default_has_no_file_database_or_prowlarr():
     cfg=main.defaults()
     assert not cfg["search"]["enable_prowlarr"]
-    assert all(x["enabled"] for x in cfg["direct_trackers"])
-    assert set(x["kind"] for x in cfg["direct_trackers"])=={"rutor","nnmclub","megapeer"}
+    assert sum(x["enabled"] for x in cfg["direct_trackers"])==3
+    assert {"rutor","nnmclub","megapeer","rutracker","kinozal"}==set(x["kind"] for x in cfg["direct_trackers"])
     assert main.cache_stats()["disk_database_bytes"]==0
 
 def test_cache_clears_without_disk(monkeypatch):

@@ -14,7 +14,7 @@ def run(x):return asyncio.run(x)
 
 def test_first_run_includes_all_public_sources():
     c=main.defaults()
-    assert c['version']==3
+    assert c['version']==4
     assert not c['search']['enable_prowlarr']
     assert len(c['direct_trackers'])==3
     assert c['search']['include_public']
