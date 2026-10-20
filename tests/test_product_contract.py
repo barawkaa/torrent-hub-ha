@@ -183,3 +183,25 @@ def test_save_torrent_to_media_does_not_overwrite(monkeypatch,tmp_path):
     assert first['ok'] and second['ok']
     assert first['path'] != second['path']
     assert (tmp_path/'safe.torrent').read_bytes()==b'dummy'
+
+
+def test_offline_definitions_migrate_without_duplicates(tmp_path):
+    import runner,hashlib,json
+    source=tmp_path/'bundled'
+    source.mkdir()
+    destination=tmp_path/'Definitions'
+    legacy=destination/'Custom'
+    legacy.mkdir(parents=True)
+    data=b'id: rutor\\nname: RuTor\\n'
+    (source/'rutor.yml').write_bytes(data)
+    (legacy/'rutor.yml').write_bytes(data)
+    digest=hashlib.sha256(data).hexdigest()
+    (legacy/'.torrenthub-managed.json').write_text(json.dumps({'rutor.yml':digest}),encoding='utf8')
+    result=runner.install_bundled_definitions(source,destination)
+    assert 'rutor.yml' in result
+    assert (destination/'rutor.yml').read_bytes()==data
+    assert not (legacy/'rutor.yml').exists()
+    assert runner.install_bundled_definitions(source,destination)==[]
+    (destination/'rutor.yml').write_text('user-edited',encoding='utf8')
+    runner.install_bundled_definitions(source,destination)
+    assert (destination/'rutor.yml').read_text(encoding='utf8')=='user-edited'

@@ -26,26 +26,43 @@ def launch_engine():
     return child
 
 
-def install_bundled_definitions(bundled=Path('/app/definitions'), destination=Path('/data/prowlarr/Definitions/Custom')):
-    """Install versioned definitions; preserve user overrides and support upgrades."""
+def install_bundled_definitions(bundled=Path('/app/definitions'), destination=Path('/data/prowlarr/Definitions')):
+    """Maintain a small offline indexer subset without duplicate Cardigann definitions.
+
+    Prowlarr rejects definitions with duplicate ids/names. Older Torrent Hub
+    versions erroneously installed these files under Definitions/Custom even
+    when the regular Definitions folder already contained the same trackers.
+    Safely delete only our own checksum-matched legacy Custom files.
+    """
     destination.mkdir(parents=True, exist_ok=True)
+    names=('rutor.yml', 'noname-club.yml', 'megapeer.yml', 'kinozal.yml', 'rustorka.yml')
+    custom=destination/'Custom'
+    previous=custom/'.torrenthub-managed.json'
+    try: owned=json.loads(previous.read_text('utf8'))
+    except (FileNotFoundError, ValueError): owned={}
+    for filename in names:
+        former=custom/filename
+        if former.is_file() and hashlib.sha256(former.read_bytes()).hexdigest()==owned.get(filename):
+            former.unlink()
+    if previous.exists():
+        previous.unlink()
     manifest=destination/'.torrenthub-managed.json'
     try: managed=json.loads(manifest.read_text('utf8'))
-    except (FileNotFoundError,ValueError):managed={}
+    except (FileNotFoundError, ValueError): managed={}
     updated=[]
-    for filename in ('rutor.yml', 'noname-club.yml', 'megapeer.yml', 'kinozal.yml', 'rustorka.yml'):
+    for filename in names:
         source=bundled/filename
         target=destination/filename
         if not source.is_file():continue
         source_sha=hashlib.sha256(source.read_bytes()).hexdigest()
         current_sha=hashlib.sha256(target.read_bytes()).hexdigest() if target.exists() else ''
+        # Never overwrite an existing upstream definition or modified file.
         if not target.exists() or (current_sha==managed.get(filename) and current_sha!=source_sha):
             shutil.copyfile(source,target)
             managed[filename]=source_sha
             updated.append(filename)
     manifest.write_text(json.dumps(managed,indent=2),'utf8')
     return updated
-
 
 def main():
     signal.signal(signal.SIGTERM,stop)
