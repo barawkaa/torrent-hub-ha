@@ -1,5 +1,5 @@
 name: Torrent Hub
-version: "1.1.0"
+version: "1.1.1"
 slug: torrent_hub
 description: Самостоятельный поиск торрентов: трекеры, агрегаторы, прокси, TorrServer
 arch:
@@ -13,6 +13,5 @@ panel_icon: mdi:movie-search
 panel_title: Torrent Hub
 panel_admin: true
 watchdog: http://[HOST]:8765/healthz
-ports:
 options: {}
 schema: {}
