@@ -314,9 +314,9 @@ async def run_check(category='all',entry=None,draft=None):
         started=time.monotonic()
         try:
             rows=await search_tracker(item,proxy,'Интерстеллар')
-            value=status(True,f'Прямой поиск: {len(rows)} раздач',round((time.monotonic()-started)*1000),count=len(rows),state='ok' if rows else 'empty')
+            value=status(True,('Доступен — '+str(len(rows))+' результатов проверки') if rows else 'Доступен, но проверочный запрос ничего не нашёл',round((time.monotonic()-started)*1000),count=len(rows),state='ok' if rows else 'empty')
         except Exception as exc:
-            value=status(False,'Прямой поиск: '+str(exc)[:180],round((time.monotonic()-started)*1000),state='error')
+            value=status(False,'Поиск недоступен: '+str(exc)[:180],round((time.monotonic()-started)*1000),state='error')
     elif category=='source':
         item=draft or next(x for x in config['sources'] if x['id']==entry)
         if draft and not item.get('api_key'):
@@ -702,7 +702,7 @@ async def provider_plan(payload:Search):
         ident='direct:'+tracker['id']
         if payload.selected_sources is not None and ident not in payload.selected_sources:continue
         async def live(item=tracker):return await search_tracker(item,cfg['proxy'],payload.query.strip())
-        plan.append((ident,tracker['name']+' — напрямую',live))
+        plan.append((ident,tracker['name'],live))
     for src in cfg['sources']:
         if not src['enabled'] or (src['group']=='public' and not payload.include_public):continue
         if payload.selected_sources is not None and src['id'] not in payload.selected_sources:continue
