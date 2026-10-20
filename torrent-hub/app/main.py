@@ -409,6 +409,11 @@ class Test(BaseModel):
 @app.get('/')
 async def index(): return FileResponse(BASE/'static'/'index.html')
 
+@app.get('/manifest.webmanifest')
+async def pwa_manifest():
+    return FileResponse(BASE/'static'/'manifest.webmanifest',media_type='application/manifest+json',
+                        headers={'Cache-Control':'no-cache'})
+
 @app.get('/icon.png')
 async def icon():
     return FileResponse(BASE/'static'/'icon.png',media_type='image/png')
