@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item><shape><solid android:color="#0D2037" /><corners android:radius="4dp" /></shape></item>
+    <item android:left="30dp" android:right="170dp" android:top="8dp" android:bottom="8dp">
+        <bitmap android:src="@drawable/app_icon" android:gravity="center" />
+    </item>
+</layer-list>
