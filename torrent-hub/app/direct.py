@@ -162,7 +162,7 @@ async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
         pattern=str(tracker.get("adapter",{}).get("path",""))
         if not pattern.startswith("/") or pattern.startswith("//") or "{query}" not in pattern:
             raise ValueError("Адрес поиска: путь должен начинаться с / и содержать {query}")
-        url=base+pattern.replace("{query}",quote(query.strip(),safe=""))
+        url=base+pattern.replace("{query}",quote_from_bytes(query.strip().encode(tracker.get("adapter",{}).get("encoding") or "utf-8")))
         response=await fetch(proxy,route,url,timeout=24,headers=COMMON_HEADERS)
         html=response.content.decode(tracker.get("adapter",{}).get("encoding","utf-8"),errors="replace")
     elif kind=="rutor":

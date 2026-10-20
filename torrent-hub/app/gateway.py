@@ -72,7 +72,7 @@ def same_origin(request: Request) -> bool:
 @external_app.middleware("http")
 async def access_control(request: Request, call_next):
     path = request.url.path
-    is_login = path in ("/login", "/auth/login")
+    is_login = path in ("/login", "/auth/login", "/icon.png", "/manifest.webmanifest")
     if not is_login and not authenticated(request):
         if request.method == "GET" and not path.startswith("/api/"):
             response = RedirectResponse("/login", status_code=303)
