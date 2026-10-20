@@ -14,8 +14,9 @@ def run(x):return asyncio.run(x)
 
 def test_first_run_includes_all_public_sources():
     c=main.defaults()
-    assert c['version']==2
-    assert c['search']['enable_prowlarr']
+    assert c['version']==3
+    assert not c['search']['enable_prowlarr']
+    assert len(c['direct_trackers'])==3
     assert c['search']['include_public']
     assert all(x['enabled'] for x in c['sources'])
     assert all(x['route']=='inherit' for x in c['sources'])
@@ -61,7 +62,7 @@ def test_provider_selection_skips_unselected(monkeypatch):
     plan=run(main.provider_plan(main.Search(query='matrix',selected_sources=['jac-black'])))
     assert [x[0] for x in plan]==['jac-black']
     plan2=run(main.provider_plan(main.Search(query='matrix')))
-    assert len(plan2)==len(main.config['sources'])+1
+    assert len(plan2)==len(main.config['sources'])+len(main.config['direct_trackers'])
 
 
 def test_partial_source_errors_do_not_hide_other_results(monkeypatch):
@@ -72,7 +73,7 @@ def test_partial_source_errors_do_not_hide_other_results(monkeypatch):
     monkeypatch.setattr(main,'search_external',fake)
     cfg=main.config
     cfg['search']['enable_prowlarr']=False
-    response=run(main.run_search_once(main.Search(query='example')))
+    response=run(main.run_search_once(main.Search(query='example',selected_sources=[s['id'] for s in cfg['sources']])))
     assert len(response['items'])==1
     assert any(not p['ok'] and p['id']=='jac-black' for p in response['providers'])
     assert any(p['ok'] and p['count']==1 for p in response['providers'])
@@ -86,7 +87,7 @@ def test_search_progress_job_contains_source_counts(monkeypatch):
         return [dict(core.result_of({'title':'Film','infoHash':HASH,'seeders':15},src['name']),source_id=src['id'])]
     monkeypatch.setattr(main,'search_external',fake)
     async def scenario():
-        created=await main.search_start(main.Search(query='film'))
+        created=await main.search_start(main.Search(query='film',selected_sources=[s['id'] for s in main.config['sources']]))
         jid=created['job_id']
         assert len((await main.search_job(jid))['providers'])==4
         await asyncio.sleep(.08)
