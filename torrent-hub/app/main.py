@@ -23,7 +23,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from direct import TRACKERS, search_tracker
+from direct import TRACKERS, search_tracker, login_tracker, invalidate_tracker_session, TrackerLoginError
 from core import (BencodeError, btih, choose_routes, fetch, magnet_for, magnet_from_torrent,
                   magnet_hash, merge_results, proxy_address, result_of, sanitize_url, status)
 
@@ -46,7 +46,7 @@ DEFAULT_TRACKERS=('rutor','noname-club','megapeer')
 
 
 def defaults():
-    return {'version':4,'proxy': {'mode':'direct','type':'socks5','host':'','port':0,'username':'','password':''},
+    return {'version':5,'proxy': {'mode':'direct','type':'socks5','host':'','port':0,'username':'','password':''},
             'sources':[
                 {'id':'jr-maxvol','name':'jr.maxvol.pro','url':'https://jr.maxvol.pro','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
                 {'id':'jac-black','name':'jac.black','url':'https://jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
@@ -57,7 +57,7 @@ def defaults():
                 {'id':'ha','name':'Home Assistant','url':'http://192.168.1.100:8090','username':'','password':''}],
             'search':{'enable_prowlarr':False,'check_interval':900,'max_results':300,'remember_history':False,'include_public':True,'cache_minutes':10,'cache_max':350},
             'smart':{'min_size':5,'max_size':10,'min_seeders':10,'quality':'all','strict':False,'profile':'balanced'},
-            'direct_trackers':[{'id':k,'kind':k,'name':v['name'],'url':v['url'],'enabled':not bool(v.get('requires_auth')),'route':'inherit','cookie':''} for k,v in TRACKERS.items()]}
+            'direct_trackers':[{'id':k,'kind':k,'name':v['name'],'url':v['url'],'enabled':not bool(v.get('requires_auth')),'route':'inherit','cookie':'','username':'','password':''} for k,v in TRACKERS.items()]}
 
 
 def load():
@@ -83,7 +83,10 @@ def load():
                 for default in defaults()['direct_trackers']:
                     if default['id'] in ('rutracker','kinozal') and default['id'] not in existing:
                         value['direct_trackers'].append(default)
-            value['version']=4
+            for tracker in value.get('direct_trackers',[]):
+                tracker.setdefault('username','')
+                tracker.setdefault('password','')
+            value['version']=5
             return value
     return defaults()
 
@@ -107,6 +110,7 @@ def redacted():
     out['proxy']['password_set']=bool(out['proxy'].pop('password',''))
     for tracker in out.get('direct_trackers',[]):
         tracker['cookie_set']=bool(tracker.pop('cookie',''))
+        tracker['password_set']=bool(tracker.pop('password',''))
     for source in out['sources']:
         source['api_key_set']=bool(source.pop('api_key',''))
     for server in out['servers']:
@@ -495,8 +499,13 @@ def update_config(old,body):
             if record['route'] not in ('inherit','proxy','direct','auto'):raise ValueError('Неверный маршрут')
             if kind in ('rutracker','kinozal'):
                 previous=next((r for r in old.get('direct_trackers',[]) if r.get('id')==ident),{})
-                record['cookie']=str(item.get('cookie') or previous.get('cookie',''))[:3000]
+                record['cookie']=str(previous.get('cookie',''))[:3000]  # legacy fallback
                 if item.get('clear_cookie'):record['cookie']=''
+                record['username']=str(item.get('username') or previous.get('username','')).strip()[:120]
+                record['password']=str(item.get('password') or previous.get('password',''))[:300]
+                if item.get('clear_password'):
+                    record['password']=''
+                    record['cookie']=''
             if kind=='custom':
                 adapter=item.get('adapter',{})
                 if not isinstance(adapter,dict):raise ValueError('Неверное описание CSS-адаптера')
@@ -557,6 +566,55 @@ async def set_settings(payload:Config):
         config=updated;save()
         publish('Настройки сохранены')
     return redacted()
+
+
+class TrackerCredentials(BaseModel):
+    username:str=Field(min_length=1,max_length=120)
+    password:str=Field(min_length=1,max_length=300)
+    route:str|None=None
+    url:str|None=None
+
+
+@app.post('/api/trackers/{tracker_id}/connect')
+async def connect_tracker(tracker_id:str,payload:TrackerCredentials):
+    """Validate real login before persisting password, never send secrets back."""
+    global config
+    if tracker_id not in ('rutracker','kinozal'):
+        raise HTTPException(400,'Авторизация доступна только для RuTracker и Kinozal')
+    record=next((x for x in config['direct_trackers'] if x['id']==tracker_id),None)
+    if not record:raise HTTPException(404,'Трекер не найден')
+    candidate={**record,'username':payload.username.strip(),'password':payload.password}
+    if payload.route is not None:
+        if payload.route not in ('inherit','direct','proxy','auto'):raise HTTPException(400,'Неверный маршрут')
+        candidate['route']=payload.route
+    if payload.url is not None:
+        try:candidate['url']=sanitize_url(payload.url)
+        except ValueError as exc:raise HTTPException(400,str(exc))
+    try:
+        await login_tracker(candidate,config['proxy'],force=True)
+    except (TrackerLoginError,ValueError) as exc:
+        raise HTTPException(422,'Не удалось войти: '+str(exc)[:220])
+    except Exception as exc:
+        raise HTTPException(502,'Ошибка сети при авторизации: '+type(exc).__name__)
+    async with MUTEX:
+        record.update({key:candidate[key] for key in ('username','password','route','url')})
+        record['enabled']=True
+        record['cookie']=''
+        save()
+    publish('Аккаунт '+record['name']+' подключён')
+    return {'ok':True,'name':record['name'],'username':record['username'],'connected':True}
+
+
+@app.post('/api/trackers/{tracker_id}/disconnect')
+async def disconnect_tracker(tracker_id:str):
+    if tracker_id not in ('rutracker','kinozal'):raise HTTPException(400,'Неподдерживаемый трекер')
+    async with MUTEX:
+        item=next((t for t in config['direct_trackers'] if t['id']==tracker_id),None)
+        if not item:raise HTTPException(404,'Трекер не найден')
+        invalidate_tracker_session(tracker_id)
+        item.update({'password':'','username':'','cookie':'','enabled':False})
+        save()
+    return {'ok':True}
 
 
 @app.post('/api/test')
@@ -819,14 +877,14 @@ async def search_job(job_id:str):
     return {'done':job['done'],'items':job['cached'],'providers':list(job['providers'].values())}
 
 
-def tracker_download_headers(item:dict,link:str)->dict:
+async def tracker_download_headers(item:dict,link:str)->dict:
     tracker=next((x for x in config.get('direct_trackers',[]) if x.get('id')==item.get('source_id')),None)
-    if not tracker or not tracker.get('cookie'):
+    if not tracker or urlsplit(link).hostname != urlsplit(tracker['url']).hostname:
         return {}
-    # Only send account session to its configured tracker hostname.
-    if urlsplit(link).hostname != urlsplit(tracker['url']).hostname:
-        return {}
-    return {'Cookie':tracker['cookie']}
+    cookie=tracker.get('cookie','')
+    if tracker.get('username') and tracker.get('password'):
+        cookie=await login_tracker(tracker,config['proxy'])
+    return {'Cookie':cookie} if cookie else {}
 
 
 @app.post('/api/resolve')
@@ -841,7 +899,7 @@ async def resolve(payload:Resolve):
         if link.startswith('magnet:?'):magnet=link
         elif link.startswith(('http://','https://')):
             resp=await fetch(config['proxy'],item.get('route','inherit'),link,timeout=25,
-                             headers=tracker_download_headers(item,link))
+                             headers=await tracker_download_headers(item,link))
             magnet=magnet_from_torrent(resp.content)
         else:raise ValueError('Некорректная ссылка для скачивания')
         if not magnet_hash(magnet):raise ValueError('Получен некорректный magnet')
@@ -863,7 +921,7 @@ async def torrent_file_for(token: str) -> tuple[bytes,str]:
         raise HTTPException(409,'Источник предоставил только magnet, исходного .torrent нет.')
     try:
         resp=await fetch(config['proxy'],item.get('route','inherit'),link,timeout=28,
-                         headers=tracker_download_headers(item,link))
+                         headers=await tracker_download_headers(item,link))
         raw=resp.content
         if len(raw)>5_242_880:
             raise ValueError('Файл больше допустимых 5 МБ')
