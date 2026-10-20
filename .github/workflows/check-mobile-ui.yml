@@ -1,8 +1,6 @@
 name: Check mobile interface behavior
 on:
-  push:
-    branches: [release/3.0-mobile-smart]
-    paths: ['.github/workflows/check-mobile-ui.yml']
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

@@ -1,9 +1,7 @@
 name: Validate Torrent Hub 3 release candidate
 # Verification run after removing legacy Prowlarr assumptions
 on:
-  push:
-    branches: [release/3.0-mobile-smart]
-    paths: ['.github/workflows/check-release3.yml']
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
