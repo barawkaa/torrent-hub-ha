@@ -1,0 +1,33 @@
+name: One-time external direct tracker probe
+on:
+  push:
+    branches: [feature/direct-search-2.0]
+    paths: ['.github/workflows/live-probe.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r torrent-hub/requirements.txt
+      - name: Live queries (provider failures are reported, not concealed)
+        run: |
+          python - <<'PY'
+          import asyncio,sys
+          sys.path.insert(0,'torrent-hub/app')
+          from direct import TRACKERS,search_tracker
+          async def check(key,data):
+              try:
+                  rows=await asyncio.wait_for(search_tracker({'id':key,'kind':key,'name':data['name'],'url':data['url'],'route':'direct'}, {'mode':'direct'},'Титаник'),timeout=26)
+                  print(f"{key}: OK, count={len(rows)}, sample={rows[0]['title'][:60] if rows else ''}",flush=True)
+              except Exception as e:
+                  print(f"{key}: ERROR {type(e).__name__}: {str(e)[:220]}",flush=True)
+          async def main():
+              await asyncio.gather(*(check(k,v) for k,v in TRACKERS.items()))
+          asyncio.run(main())
+          PY
