@@ -28,6 +28,7 @@ BASE = pathlib.Path(__file__).resolve().parent
 DATA = pathlib.Path(os.environ.get('TORRENT_HUB_DATA','/data/torrent-hub'))
 P_DATA = pathlib.Path(os.environ.get('PROWLARR_DATA','/data/prowlarr'))
 STATE = DATA/'state.json'
+MEDIA_DIR=pathlib.Path(os.environ.get('TORRENT_HUB_MEDIA_DIR','/media/TorrentHub'))
 P_URL='http://127.0.0.1:9696'
 log=logging.getLogger('torrent_hub')
 logging.basicConfig(level=logging.INFO)
@@ -679,7 +680,9 @@ async def torrent_file_for(token: str) -> tuple[bytes,str]:
         raw=resp.content
         if len(raw)>5_242_880:
             raise ValueError('Файл больше допустимых 5 МБ')
-        magnet_from_torrent(raw) # validates the complete torrent, rejects HTML/errors
+        extracted=magnet_from_torrent(raw) # validates the complete torrent, rejects HTML/errors
+        if item.get('hash') and magnet_hash(extracted)!=item['hash']:
+            raise ValueError('Торрент-файл не соответствует выбранной раздаче')
         name='torrenthub-'+hashlib.sha1(raw).hexdigest()[:18]+'.torrent'
         return raw,name
     except HTTPException:
@@ -699,7 +702,7 @@ async def download_torrent(token: str):
 @app.post('/api/torrent/{token}/save-media')
 async def save_torrent_to_media(token: str):
     raw,name=await torrent_file_for(token)
-    target_dir=pathlib.Path('/media/TorrentHub')
+    target_dir=MEDIA_DIR
     try:
         target_dir.mkdir(parents=True,exist_ok=True)
         path=target_dir/name

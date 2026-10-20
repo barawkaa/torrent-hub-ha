@@ -130,3 +130,56 @@ def test_default_indexer_autoinstall(monkeypatch):
 def test_external_url_rejects_internal_address():
     with pytest.raises(ValueError):core.external_url_guard('http://127.0.0.1:8123')
     with pytest.raises(ValueError):core.external_url_guard('http://192.168.1.100:8090')
+
+
+def test_torrent_icon_route_exists():
+    from fastapi.testclient import TestClient
+    response=TestClient(main.app).get('/icon.png')
+    assert response.status_code==200
+    assert response.headers['content-type'].startswith('image/png')
+    assert response.content.startswith(b'\\x89PNG'.decode('unicode_escape').encode('latin1'))
+
+
+def test_saved_proxy_validation_uses_preserved_password(monkeypatch):
+    cfg=main.defaults()
+    cfg['proxy']['password']='secret-password'
+    monkeypatch.setattr(main,'config',cfg)
+    seen=[]
+    async def fake(settings):
+        seen.append(settings.copy())
+        return core.status(True,'OK')
+    monkeypatch.setattr(main,'check_proxy',fake)
+    assert run(main.run_check('proxy',draft={'host':'192.168.1.100','password':''}))['ok']
+    assert seen[0]['password']=='secret-password'
+    assert cfg['proxy']['password']=='secret-password'
+
+
+def test_download_real_torrent_and_refuse_fake_metadata(monkeypatch):
+    import time
+    info=b'd4:name4:demo6:lengthi12ee'
+    torrent=b'd8:announce18:udp://tracker.test4:info'+info+b'e'
+    sha=__import__('hashlib').sha1(info).hexdigest()
+    main.SEARCH_CACHE['real-file']=(time.monotonic(),{'download':'https://example.org/file.torrent','hash':sha,'route':'proxy'})
+    class FakeResponse:
+        content=torrent
+    async def fake(*args,**kwargs):return FakeResponse()
+    monkeypatch.setattr(main,'fetch',fake)
+    blob,name=run(main.torrent_file_for('real-file'))
+    assert blob==torrent and name.endswith('.torrent')
+    main.SEARCH_CACHE['real-file']=(time.monotonic(),{'download':'https://example.org/file.torrent','hash':'f'*40,'route':'proxy'})
+    with pytest.raises(main.HTTPException) as exc:run(main.torrent_file_for('real-file'))
+    assert exc.value.status_code==502
+    main.SEARCH_CACHE['magnet-only']=(time.monotonic(),{'download':'','hash':sha})
+    with pytest.raises(main.HTTPException) as exc2:run(main.torrent_file_for('magnet-only'))
+    assert exc2.value.status_code==409
+
+
+def test_save_torrent_to_media_does_not_overwrite(monkeypatch,tmp_path):
+    monkeypatch.setattr(main,'MEDIA_DIR',tmp_path)
+    async def fake(_token):return b'dummy','safe.torrent'
+    monkeypatch.setattr(main,'torrent_file_for',fake)
+    first=run(main.save_torrent_to_media('one'))
+    second=run(main.save_torrent_to_media('one'))
+    assert first['ok'] and second['ok']
+    assert first['path'] != second['path']
+    assert (tmp_path/'safe.torrent').read_bytes()==b'dummy'
