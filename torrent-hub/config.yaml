@@ -1,5 +1,5 @@
 name: Torrent Hub
-version: "3.0.1"
+version: "3.1.0"
 image: "ghcr.io/barawkaa/torrent-hub-ha"
 slug: torrent_hub
 description: "Самостоятельный поиск торрентов: трекеры, агрегаторы, прокси, TorrServer"
