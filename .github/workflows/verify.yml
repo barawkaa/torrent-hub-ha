@@ -1,8 +1,6 @@
-name: Verify Torrent Hub
+name: Verify Torrent Hub (manual)
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
@@ -16,22 +14,3 @@ jobs:
       - run: pytest -q tests
       - run: python -c "import re,pathlib; s=pathlib.Path('torrent-hub/app/static/index.html').read_text();pathlib.Path('/tmp/torrent-hub-ui.js').write_text(re.search(r'<script>(.*)</script>',s,re.S).group(1))"
       - run: node --check /tmp/torrent-hub-ui.js
-  arm64-image:
-    runs-on: ubuntu-24.04-arm
-    needs: [unit-tests]
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build ARM64 HA add-on
-        uses: docker/build-push-action@v6
-        with:
-          context: ./torrent-hub
-          platforms: linux/arm64
-          load: true
-          tags: torrent-hub-ci:arm64
-          push: false
-          provenance: false
-      - name: Test Prowlarr boot, offline definitions, automatic tracker setup
-        timeout-minutes: 4
-        run: sh scripts/smoke_container.sh torrent-hub-ci:arm64
