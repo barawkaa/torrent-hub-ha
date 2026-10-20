@@ -1,0 +1,41 @@
+name: One-time diagnosis of tracker layouts
+on:
+  push:
+    branches: [feature/direct-search-2.0]
+    paths: ['.github/workflows/live-layout.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install httpx beautifulsoup4
+      - name: Inspect live tracker responses
+        run: |
+          python - <<'PY'
+          import asyncio,httpx
+          from bs4 import BeautifulSoup
+          from urllib.parse import urlencode
+          async def probe(client,label,url,**kwargs):
+              try:
+                  r=await client.request('POST' if kwargs.get('content') else 'GET',url,**kwargs)
+                  soup=BeautifulSoup(r.content,'html.parser')
+                  print(label,'status',r.status_code,'final',str(r.url),'title',str(soup.title.get_text(" ",strip=True) if soup.title else '')[:100],'bytes',len(r.content), 'torrentrows',len(soup.select("table.forumline.tablesorter tbody tr")), 'allrows',len(soup.select('tr')), 'anchorSample',[str(x.get('href'))[:80] for x in soup.select('a[href]')[:12]],flush=True)
+              except Exception as e:print(label,type(e).__name__,str(e)[:150],flush=True)
+          async def main():
+              async with httpx.AsyncClient(timeout=10,follow_redirects=True) as c:
+                  base={'f[]':'-1','o':'10','s':'0','tm':'-1','shf':'1','sha':'1','ta':'-1','sns':'-1','sds':'4','nm':'Титаник','submit':'Поиск'}
+                  await asyncio.gather(
+                    probe(c,'NNM cp1251','https://nnmclub.to/forum/tracker.php',content=urlencode(base,encoding='cp1251').encode(),headers={'Content-Type':'application/x-www-form-urlencoded'}),
+                    probe(c,'NNM UTF8','https://nnmclub.to/forum/tracker.php',content=urlencode(base).encode(),headers={'Content-Type':'application/x-www-form-urlencoded'}),
+                    probe(c,'Mega .vip','https://megapeer.vip/browse.php?search=Titanic'),
+                    probe(c,'Mega .ru','https://megapeer.ru/browse.php?search=Titanic'),
+                    probe(c,'Mega alt','http://alt.megapeer.ru/browse.php?search=Titanic')
+                  )
+          asyncio.run(main())
+          PY
