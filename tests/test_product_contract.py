@@ -205,3 +205,19 @@ def test_offline_definitions_migrate_without_duplicates(tmp_path):
     (destination/'rutor.yml').write_text('user-edited',encoding='utf8')
     runner.install_bundled_definitions(source,destination)
     assert (destination/'rutor.yml').read_text(encoding='utf8')=='user-edited'
+
+
+def test_indexer_provisioning_retries_failed_install(monkeypatch):
+    import main
+    responses={'/api/v1/indexer':[], '/api/v1/indexer/schema':[
+        {'name':'RuTor','definitionName':'rutor','protocol':'torrent'},
+        {'name':'NoNaMe Club','definitionName':'noname-club','protocol':'torrent'},
+        {'name':'MegaPeer','definitionName':'megapeer','protocol':'torrent'}]}
+    async def fake(method,path,**kwargs):
+        from unittest.mock import Mock
+        if method=='POST':raise RuntimeError('external tracker temporarily unavailable')
+        return Mock(json=lambda:responses.get(path,[]))
+    monkeypatch.setattr(main,'prowlarr',fake)
+    monkeypatch.setattr(main,'AUTO_INSTALL_DONE',False)
+    run(main.install_default_indexers())
+    assert not main.AUTO_INSTALL_DONE

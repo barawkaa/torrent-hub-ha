@@ -230,19 +230,23 @@ async def install_default_indexers():
         schemas=(await prowlarr('GET','/api/v1/indexer/schema')).json()
         defined={re.sub('[^a-z0-9]','',str(x.get('definitionName') or x.get('name','')).lower()):x for x in schemas if x.get('protocol')=='torrent'}
         existing={re.sub('[^a-z0-9]','',str(x.get('name','')).lower()) for x in installed}
+        unresolved=[]
         for ident in DEFAULT_TRACKERS:
             key=ident.replace('-','')
             src=defined.get(key)
             if src is None:
                 publish('Определение '+ident+' не найдено; проверим позже')
+                unresolved.append(ident)
                 continue
             if re.sub('[^a-z0-9]','',str(src.get('name','')).lower()) in existing:continue
             try:
                 model=copy.deepcopy(src);model['enable']=True
                 await prowlarr('POST','/api/v1/indexer',params={'forceSave':'true'},json=model)
                 publish('Автоматически добавлен трекер '+str(src.get('name',ident)))
-            except Exception as exc:publish('Не удалось добавить '+ident+': '+str(exc)[:110])
-        AUTO_INSTALL_DONE=not any(x.replace('-','') not in defined for x in DEFAULT_TRACKERS)
+            except Exception as exc:
+                unresolved.append(ident)
+                publish('Не удалось добавить '+ident+': '+str(exc)[:110])
+        AUTO_INSTALL_DONE=not bool(unresolved)
     except Exception as exc:publish('Автоматическая настройка трекеров: '+str(exc)[:130])
 
 
@@ -299,30 +303,42 @@ async def run_check(category='all',entry=None,draft=None):
     return value
 
 
+async def initialise_indexers():
+    """Retry slow first-boot indexer provisioning independently of UI/health checks."""
+    proxy_applied=False
+    while True:
+        if prowlarr_key():
+            if not proxy_applied and config['proxy']['mode'] in ('proxy','direct'):
+                try:
+                    await apply_engine_proxy()
+                    proxy_applied=True
+                except Exception as exc:
+                    publish('Настройка прокси поисковика: '+str(exc)[:130])
+            if not AUTO_INSTALL_DONE:
+                await install_default_indexers()
+            if proxy_applied and AUTO_INSTALL_DONE:
+                return
+        await asyncio.sleep(75)
+
+
 async def monitoring():
-    first=True
     while True:
         try:
-            if prowlarr_key():
-                if first:
-                    first=False
-                    if config['proxy']['mode'] in ('proxy','direct'):
-                        try:await apply_engine_proxy()
-                        except Exception as exc:publish('Прокси Prowlarr: '+str(exc)[:130])
-                if not AUTO_INSTALL_DONE:await install_default_indexers()
             await run_check('all')
         except Exception as exc:
             log.error('check cycle: %s',exc)
-        await asyncio.sleep(12 if first else max(60,int(config['search'].get('check_interval',300))))
+        await asyncio.sleep(max(60,int(config['search'].get('check_interval',300))))
 
 
 @asynccontextmanager
 async def lifespan(_app):
-    monitor=asyncio.create_task(monitoring())
+    tasks=[asyncio.create_task(monitoring()), asyncio.create_task(initialise_indexers())]
     yield
-    monitor.cancel()
-    try:await monitor
-    except asyncio.CancelledError:pass
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        try:await task
+        except asyncio.CancelledError:pass
 
 app=FastAPI(title='Torrent Hub',docs_url=None,redoc_url=None,lifespan=lifespan)
 
