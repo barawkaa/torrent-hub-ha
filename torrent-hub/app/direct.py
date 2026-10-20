@@ -132,7 +132,7 @@ async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
         html=response.content.decode("cp1251",errors="replace")
     else:
         response=await fetch(proxy,route,base+"/forum/tracker.php",method="POST",content=__import__("urllib.parse",fromlist=["urlencode"]).urlencode(
-            {"f[]":"-1","o":"10","s":"0","tm":"-1","shf":"1","sha":"1","ta":"-1","sns":"-1","sds":"4","nm":query,"submit":"Поиск"}).encode("utf-8"),
+            {"f[]":"-1","o":"10","s":"0","tm":"-1","shf":"1","sha":"1","ta":"-1","sns":"-1","sds":"4","nm":query,"submit":"Поиск"},encoding="cp1251").encode("ascii"),
                             headers={**COMMON_HEADERS,"Content-Type":"application/x-www-form-urlencoded"},timeout=24)
         html=response.content.decode("cp1251",errors="replace")
     items=PARSERS[kind](html,base)

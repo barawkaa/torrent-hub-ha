@@ -44,7 +44,7 @@ DEFAULT_TRACKERS=('rutor','noname-club','megapeer')
 
 
 def defaults():
-    return {'version':2,'proxy': {'mode':'proxy','type':'socks5','host':'192.168.1.100','port':2080,'username':'','password':''},
+    return {'version':3,'proxy': {'mode':'proxy','type':'socks5','host':'192.168.1.100','port':2080,'username':'','password':''},
             'sources':[
                 {'id':'jr-maxvol','name':'jr.maxvol.pro','url':'https://jr.maxvol.pro','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
                 {'id':'jac-black','name':'jac.black','url':'https://jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
