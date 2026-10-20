@@ -309,8 +309,10 @@ async def run_check(category='all',entry=None,draft=None):
     elif category=='tracker':
         stored=next(x for x in config['direct_trackers'] if x['id']==entry)
         item={**stored,**(draft or {})}
-        # A blank password field must not erase saved tracker credentials.
+        # Blank login fields in check draft must preserve previously saved credentials.
         if not item.get('cookie'):item['cookie']=stored.get('cookie','')
+        if not item.get('password'):item['password']=stored.get('password','')
+        if not item.get('username'):item['username']=stored.get('username','')
         started=time.monotonic()
         try:
             rows=await search_tracker(item,proxy,'Интерстеллар')
