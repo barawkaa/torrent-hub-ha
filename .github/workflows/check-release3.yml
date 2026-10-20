@@ -1,0 +1,82 @@
+name: Validate Torrent Hub 3 release candidate
+on:
+  push:
+    branches: [release/3.0-mobile-smart]
+    paths: ['.github/workflows/check-release3.yml']
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile, install, test backend and authentication
+        run: |
+          python -m pip install -r torrent-hub/requirements.txt pytest
+          python -m compileall -q torrent-hub/app
+          python -m pytest -q tests/test_release3.py tests/test_live_engine.py tests/test_product_contract.py
+      - name: Check browser JavaScript and Home Assistant manifest
+        run: |
+          python - <<'PY'
+          import pathlib,re
+          import json
+          import yaml
+          s=pathlib.Path('torrent-hub/app/static/index.html').read_text()
+          scripts=re.findall(r'<script[^>]*>([\s\S]*?)</script>',s)
+          assert len(scripts)==1
+          pathlib.Path('/tmp/torrent-hub-ui.js').write_text(scripts[0])
+          conf=yaml.safe_load(pathlib.Path('torrent-hub/config.yaml').read_text())
+          assert conf['ingress_port']==8765 and conf['ports']['8766/tcp']==8766
+          json.loads(pathlib.Path('torrent-hub/app/static/manifest.webmanifest').read_text())
+          print('Web and HA app configuration OK')
+          PY
+          node --check /tmp/torrent-hub-ui.js
+  native-arm64:
+    runs-on: ubuntu-24.04-arm
+    needs: tests
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./torrent-hub
+          platforms: linux/arm64
+          load: true
+          push: false
+          provenance: false
+          tags: th-release3:test
+      - name: Verify both listeners, external port protection and live search
+        timeout-minutes: 4
+        run: |
+          docker run -d --name th-rel3 -p 18765:8765 -p 18766:8766 --tmpfs /data:rw,size=48m th-release3:test
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 2 http://127.0.0.1:18765/healthz >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:18765/manifest.webmanifest >/dev/null
+          code=$(curl --max-time 5 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18766/api/config)
+          test "$code" = "401" || { echo "UNPROTECTED EXTERNAL API: $code"; exit 1; }
+          code=$(curl --max-time 5 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18766/login)
+          test "$code" = "200" || { echo "LOGIN UI FAILED: $code"; exit 1; }
+          python - <<'PY'
+          import json,urllib.request
+          root='http://127.0.0.1:18765/api/'
+          request=urllib.request.Request(root+'search',
+            data=json.dumps({'query':'Титаник','include_public':False}).encode(),
+            headers={'Content-Type':'application/json'},method='POST')
+          with urllib.request.urlopen(request,timeout=100) as response: search=json.load(response)
+          print('LIVE SOURCE COUNTS:', [(p['id'],p['count']) for p in search['providers']], flush=True)
+          assert len(search['providers'])>=3
+          assert any(p['count']>0 for p in search['providers'])
+          assert len(search['items'])>0
+          assert any(str(i.get('magnet','')).startswith('magnet:?xt=') for i in search['items'])
+          print('PASS: independent search and authenticated companion port',flush=True)
+          PY
+      - name: Container logs if failed
+        if: failure()
+        run: docker logs --tail 100 th-rel3 || true
