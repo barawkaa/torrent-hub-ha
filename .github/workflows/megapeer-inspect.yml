@@ -1,0 +1,36 @@
+name: One-time MegaPeer markup probe
+on:
+  push:
+    branches: [feature/direct-search-2.0]
+    paths: ['.github/workflows/megapeer-inspect.yml']
+permissions:
+  contents: read
+jobs:
+  layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install httpx beautifulsoup4
+      - name: Compare valid searches and output limited HTML structure
+        run: |
+          python - <<'PY'
+          import httpx
+          from bs4 import BeautifulSoup
+          from urllib.parse import quote_from_bytes
+          terms=['Titanic',quote_from_bytes('Титаник'.encode('cp1251')),quote_from_bytes('Титаник'.encode('utf8'))]
+          for i,q in enumerate(terms):
+              url='https://megapeer.vip/browse.php?search='+q+'&cat=0&stype=0&sort=0&ascdesc=0'
+              try:
+                  r=httpx.get(url,timeout=9,follow_redirects=True)
+                  doc=BeautifulSoup(r.content,'html.parser')
+                  print('TEST',i,'status',r.status_code,'title',doc.title.get_text(' ',strip=True) if doc.title else '',flush=True)
+                  print('SELECTORS',[(x,len(doc.select(x))) for x in ['tr.table_fon','a[href^="/torrent/"]','a[href^="/post/"]','a[href^="magnet:"]','a[href^="/download/"]','table','article','.torrent']],flush=True)
+                  for a in doc.select('a[href^="/post/"]')[:2]:
+                      print('POST LINK',a.get('href'),'HTML',str(a.parent)[:550],flush=True)
+                  for tr in doc.select('tr')[:4]:print('TR',str(tr)[:500],flush=True)
+              except Exception as e:print('ERR',i,repr(e)[:150],flush=True)
+          PY
