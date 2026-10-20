@@ -43,7 +43,7 @@ function blankServer(){return{id:newID(),name:'Новый TorrServer',url:'http:
 function tab(id){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===id));document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='tab-'+id))}
 $('nav').onclick=e=>{let b=e.target.closest('button[data-tab]');if(b){tab(b.dataset.tab);if(b.dataset.tab==='indexers')renderDirectTrackers()}};
 function labelStatus(x){if(!x)return '<span class="pill">Не проверялось</span>';return `<span class="pill ${x.ok?(x.state==='empty'?'warn':'ok'):'bad'}">${x.ok?(x.state==='empty'?'Нет результатов':'Доступен'):'Ошибка'}</span> <span class="tiny">${esc(x.message||'')}${x.latency_ms?' • '+x.latency_ms+' мс':''}</span>`}
-function populate(){if(!cfg)return;let p=cfg.proxy;$('mode').value=p.mode;$('type').value=p.type;$('proxyHost').value=p.host;$('proxyPort').value=p.port;$('proxyUser').value=p.username||'';$('proxyPass').value='';renderSources();renderServers();renderDirectTrackers();renderSearchProviders();renderLibraryServers();refreshProxyInfo()}
+function populate(){if(!cfg)return;renderAccessSettings();renderSmartPreferences();let p=cfg.proxy;$('mode').value=p.mode;$('type').value=p.type;$('proxyHost').value=p.host;$('proxyPort').value=p.port;$('proxyUser').value=p.username||'';$('proxyPass').value='';renderSources();renderServers();renderDirectTrackers();renderSearchProviders();renderLibraryServers();refreshProxyInfo()}
 function makeSource(s,i){return `<div class="item" data-source="${i}"><div class="two"><div class="field"><label>Название</label><input class="s-name" value="${esc(s.name)}"></div><div class="field"><label>Адрес API</label><input class="s-url" value="${esc(s.url)}"></div><div class="field"><label>Тип API</label><select class="s-kind"><option value="jacred" ${s.kind==='jacred'?'selected':''}>JacRed</option><option value="knaben" ${s.kind==='knaben'?'selected':''}>Knaben</option><option value="torznab" ${s.kind==='torznab'?'selected':''}>Torznab</option></select></div><div class="field"><label>API-ключ (если нужен; пусто — оставить)</label><input class="s-key" type="password" placeholder="${s.api_key_set?'Сохранён':'Не требуется'}"></div><div class="field"><label>Группа</label><select class="s-group"><option value="public" ${s.group==='public'?'selected':''}>Стандартный поиск</option><option value="main" ${s.group==='main'?'selected':''}>Постоянный поиск</option></select></div><div class="field"><label>Выход в интернет</label><select class="s-route">${[['inherit','Глобальные настройки'],['proxy','Через прокси'],['direct','Напрямую'],['auto','Напрямую, затем прокси']].map(([v,t])=>`<option value="${v}" ${s.route===v?'selected':''}>${t}</option>`).join('')}</select></div></div><div class="flex foot"><label class="check"><input type="checkbox" class="s-on" ${s.enabled?'checked':''}>Включён</label><span class="source-health">${labelStatus(checks['source:'+s.id])}</span><button class="btn small" data-source-test="${i}">Проверить поля</button><button class="btn small danger" data-source-remove="${i}">Удалить</button></div></div>`}
 function makeServer(s,i){return `<div class="item" data-server="${i}"><div class="two"><div class="field"><label>Название</label><input class="v-name" value="${esc(s.name)}"></div><div class="field"><label>Адрес</label><input class="v-url" value="${esc(s.url)}"></div><div class="field"><label>Логин (если есть)</label><input class="v-user" value="${esc(s.username||'')}"></div><div class="field"><label>Пароль (пустое — сохранить)</label><input type="password" class="v-pass" placeholder="${s.password_set?'Пароль сохранён':'Не требуется'}"></div></div><div class="flex foot"><span class="server-health">${labelStatus(checks['server:'+s.id])}</span><button class="btn small" data-server-test="${i}">Проверить поля</button><button class="btn small danger" data-server-remove="${i}">Удалить</button></div></div>`}
 function renderSources(){if(cfg){$('sources').innerHTML=cfg.sources.map(makeSource).join('')||'<p class="muted">Нет источников.</p>';renderSearchProviders()}}
@@ -64,14 +64,15 @@ $('saveProxy').onclick=async()=>{if(await save({proxy:proxyDraft()}))$('proxyMsg
 async function refreshChecks(){try{let r=await api('status');checks=r.checks;renderHealth();refreshStatusLabels();$('events').innerHTML=(r.events||[]).map(e=>`<div class="item">${esc(e.at)} — ${esc(e.message)}</div>`).join('')||'Событий пока нет'}catch(e){console.log(e)}}
 function refreshStatusLabels(){refreshProxyInfo();document.querySelectorAll('[data-source]').forEach(n=>{let s=cfg.sources[+n.dataset.source];if(s)n.querySelector('.source-health').innerHTML=labelStatus(checks['source:'+s.id])});document.querySelectorAll('[data-server]').forEach(n=>{let s=cfg.servers[+n.dataset.server];if(s)n.querySelector('.server-health').innerHTML=labelStatus(checks['server:'+s.id])})}
 function renderHealth(){
-const groups=[
- ['Система и сеть',[['Torrent Hub','direct'],['SOCKS5 / HTTP-прокси','proxy']]],
- ['Торрент-трекеры',...cfg.direct_trackers.filter(t=>t.enabled).map(t=>[[t.name,'tracker:'+t.id]])],
- ['Дополнительные агрегаторы',...cfg.sources.filter(t=>t.enabled).map(t=>[[t.name,'source:'+t.id]])],
- ['TorrServer',...cfg.servers.map(t=>[[t.name,'server:'+t.id]])]
-];
-$('healthGrid').className='health-groups';
-$('healthGrid').innerHTML=groups.map(([title,...items])=>'<div class="health-section"><h3>'+esc(title)+'</h3><div class="cards">'+items.flat().map(([name,key])=>'<div class="stat"><div class="title">'+esc(name)+'</div><div class="details">'+labelStatus(checks[key])+'</div><div class="tiny">'+esc(checks[key]?.checked_at||'')+'</div></div>').join('')+'</div></div>').join('');
+ if(!cfg)return;
+ const groups=[
+ ['Система и сеть',[['Прямой поисковик','direct'],['SOCKS5 / HTTP-прокси','proxy']]],
+ ['Торрент-трекеры',cfg.direct_trackers.filter(t=>t.enabled).map(t=>[t.name,'tracker:'+t.id])],
+ ['Дополнительные агрегаторы',cfg.sources.filter(t=>t.enabled).map(t=>[t.name,'source:'+t.id])],
+ ['TorrServer',cfg.servers.map(t=>[t.name,'server:'+t.id])]
+ ];
+ $('healthGrid').className='health-groups';
+ $('healthGrid').innerHTML=groups.map(([title,items])=>'<div class="health-section"><h3>'+esc(title)+'</h3><div class="cards">'+items.map(([name,key])=>'<div class="stat"><div class="title">'+esc(name)+'</div><div class="details">'+labelStatus(checks[key])+'</div><div class="tiny">'+esc(checks[key]?.checked_at||'')+'</div></div>').join('')+'</div></div>').join('');
 }
 function renderEngine(){let h=checks.prowlarr;$('engineState').innerHTML=labelStatus(h)};
 async function loadIndexers(){try{let d=await api('indexers');idx=d.indexers;indexerErrors=d.errors||[];renderIndexers();renderEngine();if(cat.length)filterCatalog()}catch(e){$('indexerList').innerHTML='<p class="warn-message">'+esc(e.message)+'</p>'}}
@@ -128,6 +129,7 @@ function rendered(){
  $('resultCount').textContent='Найдено: '+filtered.length+' раздач';
  const metric=(label,value,variant='')=>'<div class="result-metric '+variant+'"><strong>'+esc(value)+'</strong><small>'+label+'</small></div>';
  $('results').innerHTML=filtered.map(x=>'<div class="item result-card" data-result="'+esc(x.id)+'"><div class="item-name">'+esc(x.title)+'</div><div class="result-metrics">'+metric('Раздают',String(x.seeders??0),x.seeders>=10?'m-seeders':x.seeders>0?'m-low':'m-zero')+metric('Размер',x.size?(x.size/1073741824).toFixed(2)+' ГБ':'Неизвестно','m-size')+metric('Опубликовано',x.date?String(x.date).slice(0,10):'Нет данных','m-date')+'</div><div class="result-source">'+esc(x.tracker||x.source)+'</div><div class="result-actions"><button class="btn small" data-copy>⧉ Копировать magnet</button><button class="btn small primary" data-send>↗ Отправить</button><button class="btn small" data-torrent>↓ Скачать .torrent</button>'+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener noreferrer" class="muted">Открыть трекер ↗</a>':'')+'</div><div class="msg" data-message></div></div>').join('')||'<div class="panel muted">Нет результатов. Посмотри ошибки источников выше.</div>';
+ if(smartEnabled)renderSmartResults();
 }
 function renderProgress(providers){let ok=providers.filter(x=>x.state==='ok').length,waiting=providers.filter(x=>x.state==='pending').length;
  $('searchState').innerHTML=`<div class="panel"><div class="flex between"><b>Ход поиска</b><span class="tiny">Источников: ${providers.length} • Завершено: ${providers.length-waiting}</span></div><div class="compact-status">`+providers.map(p=>`<div class="flex between status-line"><span><span class="pill ${p.state==='ok'?'ok':p.state==='error'?'bad':p.state==='empty'?'warn':''}">${p.state==='pending'?'Поиск…':p.state==='ok'?'Найдено':p.state==='empty'?'Пусто':'Ошибка'}</span> ${esc(p.name)}</span><small>${p.state==='pending'?'':p.state==='error'?esc(p.message):p.count+' шт. • '+(p.latency_ms/1000).toFixed(1)+' c'}</small></div>`).join('')+'</div></div>';
@@ -158,12 +160,13 @@ $('results').onclick=async e=>{
  try{let magnet=await getMagnet(x);try{await navigator.clipboard.writeText(magnet);toast('Magnet скопирован')}catch{prompt('Скопируйте magnet:',magnet)}}
  catch(err){node.querySelector('[data-message]').textContent=err.message;toast(err.message,true)}finally{b.disabled=false}
 };
+$('smartResults').onclick=$('results').onclick;
 $('searchForm').onsubmit=async e=>{e.preventDefault();if(busy)return;busy=true;rawResults=[];$('results').innerHTML='<div class="panel">Ищем по доступным источникам…</div>';$('searchState').textContent='';
  let selected=$('advancedSearch').open?[...document.querySelectorAll('[data-source-select]:checked')].map(e=>e.dataset.sourceSelect):null;
  let selectedIndexers=$('advancedSearch').open?[...document.querySelectorAll('[data-indexer-select]:checked')].map(e=>+e.dataset.indexerSelect):null;
  try{let started=await api('search/start','POST',{query:$('query').value.trim(),include_public:$('includePublic').checked,selected_sources:selected,selected_indexers:selectedIndexers});activeJob=started.job_id;
    for(let n=0;n<110;n++){let r=await api('search/job/'+activeJob);renderProgress(r.providers);if(r.items.length!==rawResults.length||r.done){rawResults=r.items;rendered()};if(r.done)break;await new Promise(resolve=>setTimeout(resolve,600))}
- }catch(err){$('results').innerHTML='<div class="panel warn-message">'+esc(err.message)+'</div>'}finally{busy=false}};
+ }catch(err){$('results').innerHTML='<div class="panel warn-message">'+esc(err.message)+'</div>';if(smartEnabled)$('smartMsg').textContent=err.message}finally{busy=false;if(smartEnabled)renderSmartResults()}};
 
 
 function renderDirectTrackers(){
@@ -181,6 +184,111 @@ $('deleteLegacy').onclick=async()=>{if(!confirm('Удалить файлы ст�
 async function updateCacheStatus(){try{let c=await api('cache');$('cacheStatus').textContent=c.results+' раздач в памяти; приблизительно '+(c.bytes_estimate/1024).toFixed(1)+' КБ. На диске база: 0 Б.';$('cacheMinutes').value=c.ttl_minutes;$('cacheMax').value=c.max_results}catch(e){$('cacheStatus').textContent=e.message}}
 $('clearCache').onclick=async()=>{try{await api('cache','DELETE');await updateCacheStatus();toast('Кеш очищен')}catch(e){toast(e.message,true)}};
 $('saveCache').onclick=async()=>{if(await save({search:{cache_minutes:+$('cacheMinutes').value,cache_max:+$('cacheMax').value}}))await updateCacheStatus()};
+
+
+let smartEnabled=false;
+const smartNodes=['smartMin','smartMax','smartSeeds','smartQuality','smartProfile','smartStrict'];
+function readSmart(){
+ const min=Number($('smartMin').value),max=Number($('smartMax').value);
+ return {min_size:min,max_size:max,min_seeders:Number($('smartSeeds').value),
+ quality:$('smartQuality').value,strict:$('smartStrict').checked,profile:$('smartProfile').value};
+}
+function renderSmartLabels(){
+ $('smartMinLabel').textContent=$('smartMin').value+' ГБ';
+ $('smartMaxLabel').textContent=$('smartMax').value+' ГБ';
+ $('smartSeedsLabel').textContent=$('smartSeeds').value;
+}
+function renderSmartPreferences(){
+ if(!cfg)return;
+ const p=cfg.smart||{min_size:5,max_size:10,min_seeders:10,quality:'all',strict:false,profile:'balanced'};
+ $('smartMin').value=p.min_size;$('smartMax').value=p.max_size;$('smartSeeds').value=p.min_seeders;
+ $('smartQuality').value=p.quality;$('smartStrict').checked=p.strict;$('smartProfile').value=p.profile||'balanced';renderSmartLabels();
+}
+function presetSmart(kind){
+ const presets={balanced:[5,10,10,'1080'],compact:[1,5,5,'1080'],maximum:[12,85,10,'2160']};
+ const v=presets[kind];if(!v)return;
+ $('smartMin').value=v[0];$('smartMax').value=v[1];$('smartSeeds').value=v[2];$('smartQuality').value=v[3];
+ renderSmartLabels();renderSmartResults();
+}
+$('smartProfile').onchange=e=>{presetSmart(e.target.value)};
+for(const key of ['smartMin','smartMax','smartSeeds','smartQuality','smartStrict']){
+ $(key).oninput=()=>{
+  if(Number($('smartMin').value)>Number($('smartMax').value)){
+   if(key==='smartMin')$('smartMax').value=$('smartMin').value;
+   else $('smartMin').value=$('smartMax').value;
+  }
+  $('smartProfile').value='custom';renderSmartLabels();renderSmartResults();
+ }
+}
+$('saveSmart').onclick=async()=>{
+ if(await save({smart:readSmart()})){$('smartMsg').textContent='Настройки сохранены на сервере';renderSmartResults()}
+};
+function relevanceScore(x,q){
+ const title=x.title.toLowerCase(),words=q.toLowerCase().trim().split(/\s+/).filter(Boolean);
+ return words.length?words.reduce((v,w)=>v+(title.includes(w)?12:-20),0):0;
+}
+function smartScore(x,p,q){
+ const size=Number(x.size||0)/1073741824,seeds=Number(x.seeders||0);
+ const inside=size>=p.min_size&&size<=p.max_size;
+ const distance=size<p.min_size?p.min_size-size:size>p.max_size?size-p.max_size:0;
+ const isQuality=p.quality==='all'||new RegExp(p.quality==='2160'?'2160|4k':p.quality,'i').test(x.title);
+ const passes=inside&&seeds>=p.min_seeders&&isQuality;
+ const sizePoints=size<=0?-15:inside?46:Math.max(-70,46-8*distance);
+ const seederPoints=Math.min(85,Math.log2(1+seeds)*12)-(seeds<p.min_seeders?30:0);
+ const qualityPoints=isQuality?25:-20;
+ const score=relevanceScore(x,q)+sizePoints+seederPoints+qualityPoints;
+ return {score,passes};
+}
+function renderSmartResults(){
+ if(!smartEnabled)return;
+ const p=readSmart(),query=$('smartQuery').value.trim();
+ let ordered=rawResults.map(item=>({...item,_fit:smartScore(item,p,query)}))
+   .filter(item=>!p.strict||item._fit.passes)
+   .sort((a,b)=>b._fit.score-a._fit.score);
+ const matched=ordered.filter(x=>x._fit.passes).length;
+ $('smartMsg').textContent=rawResults.length?('Всего найдено: '+rawResults.length+'. Под твои предпочтения: '+matched+'. Рейтинг учитывает сидов, размер, качество и совпадение названия.'):'Для подбора нажми «Подобрать».';
+ const makeMetric=(label,value,cls)=>'<div class="result-metric '+cls+'"><strong>'+esc(value)+'</strong><small>'+label+'</small></div>';
+ $('smartResults').innerHTML=ordered.map((x,i)=>{
+  const rec=i===0?'⭐ Лучший вариант':x._fit.passes?'Подходит':'Альтернатива';
+  const colors=x.seeders>=10?'m-seeders':x.seeders>0?'m-low':'m-zero';
+  return '<div class="item result-card" data-result="'+esc(x.id)+'"><div class="flex between"><div class="item-name">'+esc(x.title)+'</div><span class="pill '+(x._fit.passes?'ok':'')+'">'+rec+'</span></div>'+
+  '<div class="result-metrics">'+makeMetric('Раздают',x.seeders??'Неизвестно',colors)+makeMetric('Размер',x.size?(x.size/1073741824).toFixed(2)+' ГБ':'Нет данных','m-size')+
+  makeMetric('Опубликовано',x.date||'Нет данных','m-date')+'</div>'+
+  '<div class="result-source">'+esc(x.tracker||x.source)+'</div>'+
+  '<div class="result-actions"><button class="btn small primary" data-send>Отправить</button><button class="btn small" data-copy>Копировать magnet</button><button class="btn small" data-torrent>Скачать .torrent</button></div><div class="msg" data-message></div></div>';
+ }).join('')||'<div class="panel muted">Нет подходящих раздач. Измени условия или выключи строгий фильтр.</div>';
+}
+$('smartForm').onsubmit=e=>{
+ e.preventDefault();let q=$('smartQuery').value.trim();
+ if(q.length<2||busy)return;
+ smartEnabled=true;
+ if(rawResults.length && $('query').value.trim().toLowerCase()===q.toLowerCase()){
+  renderSmartResults();return;
+ }
+ $('smartMsg').textContent='Ищем раздачи по подключённым источникам...';
+ $('query').value=q;$('searchForm').requestSubmit();
+};
+$('jumpSmart').onclick=()=>{
+ $('smartQuery').value=$('query').value.trim();
+ smartEnabled=true;tab('smart');renderSmartResults();
+};
+function renderAccessSettings(){
+ if(!cfg)return;
+ $('remoteUser').value=cfg.remote?.username||'admin';
+ $('remotePass').value='';
+ $('remoteInfo').textContent=cfg.remote?.password_set?'Отдельный доступ включён. Пароль сохранён в виде стойкого хеша.':'Доступ закрыт — пароль ещё не задан.';
+}
+$('saveRemote').onclick=async()=>{
+ const pwd=$('remotePass').value;
+ if(!pwd && !cfg.remote?.password_set){toast('Укажи пароль от 12 символов',true);return}
+ if(await save({remote:{username:$('remoteUser').value,password:pwd}})){
+  $('remoteInfo').textContent='Настройки доступа сохранены';
+ }
+};
+$('disableRemote').onclick=async()=>{
+ if(!confirm('Отключить отдельный веб-вход по порту 8766? Доступ через Home Assistant останется.'))return;
+ if(await save({remote:{disable:true}}))$('remoteInfo').textContent='Отдельный вход отключён';
+};
 
 async function boot(){try{cfg=await api('config');populate();$('includePublic').checked=cfg.search?.include_public!==false;await refreshChecks();renderDirectTrackers();await updateCacheStatus();await updateLegacyStatus()}catch(e){$('searchState').textContent='Ошибка запуска: '+e.message;toast(e.message,true)}}boot();setInterval(refreshChecks,30000);
 </script></body></html>
