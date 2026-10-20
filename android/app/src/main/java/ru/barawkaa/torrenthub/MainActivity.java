@@ -185,7 +185,7 @@ public final class MainActivity extends Activity {
 
     private Button button(String title, boolean primary) {
         Button b=new Button(this);
-        b.setText(title);b.setTextAllCaps(false);b.setTextSize(16);
+        b.setText(title);b.setAllCaps(false);b.setTextSize(16);
         b.setTextColor(COLOR_TEXT);
         b.setMinHeight(dp(isTv ? 58:50));
         b.setBackground(background(primary?COLOR_ACCENT:0xFF263E57,0));
