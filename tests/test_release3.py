@@ -1,4 +1,4 @@
-"""Release-critical tests: ingress, independent LAN auth, PWA, smart filters, custom source."""
+"""Release tests for the local web interface, HA Ingress, PWA, and search."""
 import json
 import pathlib
 import sys
@@ -24,46 +24,33 @@ def isolated(monkeypatch,tmp_path):
     yield config
 
 
-def test_standalone_rejects_unauthenticated_search(isolated):
-    with TestClient(gateway.external_app) as client:
-        r=client.get("/api/config",follow_redirects=False)
-        assert r.status_code==401
-        r=client.post("/api/send",json={"server_ids":["lg"],"id":"missing"})
-        assert r.status_code==401
-        r=client.get("/",follow_redirects=False)
-        assert r.status_code==303 and r.headers["location"]=="/login"
-        assert "пароль" in client.get("/login").text.lower()
+def test_local_web_opens_immediately_without_login(isolated):
+    with TestClient(gateway.external_app) as c:
+        assert c.get("/",follow_redirects=False).status_code==200
+        assert c.get("/api/config").status_code==200
+        assert c.get("/api/direct-trackers").status_code==200
+        assert c.get("/manifest.webmanifest").status_code==200
+        assert c.get("/icon.png").status_code==200
+        assert c.get("/login").status_code==404
+        assert c.post("/auth/login",data={}).status_code==404
+        assert "remote" not in c.get("/api/config").json()
 
 
-def test_login_success_and_password_revocation(isolated):
-    isolated2=main.update_config(isolated,{"remote":{"username":"operator","password":"strong-password-123"}})
-    main.config=isolated2
-    gateway.ATTEMPTS.clear()
-    with TestClient(gateway.external_app) as client:
-        assert client.post("/auth/login",data={"username":"operator","password":"wrong"}).status_code==401
-        assert client.get("/api/config").status_code==401
-        result=client.post("/auth/login",data={"username":"operator","password":"strong-password-123"},follow_redirects=False)
-        assert result.status_code==303
-        assert "httponly" in result.headers["set-cookie"].lower()
-        assert "samesite=strict" in result.headers["set-cookie"].lower()
-        response=client.get("/api/config")
-        assert response.status_code==200
-        body=response.json()
-        assert body["remote"]["password_set"] is True
-        assert "password_hash" not in body["remote"]
-        assert "password_salt" not in body["remote"]
-        assert "password" not in body["remote"]
-        main.config=main.update_config(main.config,{"remote":{"password":"different-password-456"}})
-        assert client.get("/api/config").status_code==401
+def test_local_web_protects_against_cross_origin_browser_actions(isolated):
+    with TestClient(gateway.external_app) as c:
+        assert c.delete("/api/cache").status_code==200
+        assert c.delete("/api/cache",headers={"Origin":"https://evil.example"}).status_code==403
+        assert c.delete("/api/cache",headers={"Sec-Fetch-Site":"cross-site"}).status_code==403
+        assert c.delete("/api/cache",headers={"Origin":"http://testserver"}).status_code==200
 
 
-def test_lan_port_only_allows_origins(monkeypatch,isolated):
-    main.config=main.update_config(isolated,{"remote":{"password":"my-huge-long-password"}})
-    with TestClient(gateway.external_app) as client:
-        client.post("/auth/login",data={"username":"admin","password":"my-huge-long-password"})
-        r=client.delete("/api/cache",headers={"Origin":"https://malicious.example"})
-        assert r.status_code==403
-        assert client.get("/api/storage").status_code==200
+def test_migrate_legacy_login_credentials(isolated,monkeypatch,tmp_path):
+    raw=main.defaults()
+    raw["remote"]={"username":"old","password_salt":"abc","password_hash":"legacy"}
+    monkeypatch.setattr(main,"STATE",tmp_path/"state.json")
+    main.STATE.write_text(json.dumps(raw),encoding="utf8")
+    updated=main.load()
+    assert "remote" not in updated
 
 
 def test_ingress_backend_works_with_supervisor_token(monkeypatch,isolated):
@@ -82,8 +69,6 @@ def test_smart_settings_saved_and_range_validation(isolated):
     assert updated["smart"]["min_seeders"]==25
     with pytest.raises(ValueError):
         main.update_config(isolated,{"smart":{"min_size":20,"max_size":10}})
-    with pytest.raises(ValueError):
-        main.update_config(isolated,{"remote":{"password":"short"}})
 
 
 def test_user_supplied_css_adapter(isolated):
@@ -118,7 +103,7 @@ def test_pwa_resources_and_sanitised_configuration(isolated):
         response=c.get("/")
         assert "Умный поиск" in response.text
         assert "smartMin" in response.text
-        assert "remotePass" in response.text
+        assert "remotePass" not in response.text
         assert "CSS: название" in response.text
 
 
