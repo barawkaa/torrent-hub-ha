@@ -117,7 +117,7 @@ async function sendSelected(id){
  catch(err){msg.textContent=err.message;toast(err.message,true)}
 }
 $('sendChoices').onclick=e=>{let button=e.target.closest('[data-send-server]');if(button)sendSelected(button.dataset.sendServer)};
-$('downloadLocal').onclick=()=>{if(!downloadRecord)return;let url='api/torrent/'+encodeURIComponent(downloadRecord.id);let a=document.createElement('a');a.href=url;a.download='';document.body.appendChild(a);a.click();a.remove();$('downloadDialog').close();toast('Запрос на скачивание отправлен браузеру')};
+$('downloadLocal').onclick=async()=>{if(!downloadRecord)return;let b=$('downloadLocal');b.disabled=true;try{let r=await fetch('api/torrent/'+encodeURIComponent(downloadRecord.id));if(!r.ok){let error=await r.json().catch(()=>({}));throw Error(error.detail||'Не удалось скачать .torrent')}let blob=await r.blob();let url=URL.createObjectURL(blob);let a=document.createElement('a');a.href=url;a.download='torrenthub-'+downloadRecord.id.slice(0,12)+'.torrent';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),15000);$('downloadDialog').close();toast('.torrent скачан в браузере')}catch(err){$('downloadMessage').textContent=err.message;toast(err.message,true)}finally{b.disabled=false}};
 $('downloadMedia').onclick=async()=>{if(!downloadRecord)return;let message=$('downloadMessage');message.textContent='Сохраняю…';try{let d=await api('torrent/'+encodeURIComponent(downloadRecord.id)+'/save-media','POST');message.textContent=d.path;toast('Сохранено: '+d.path)}catch(err){message.textContent=err.message;toast(err.message,true)}};
 $('results').onclick=async e=>{
  let b=e.target.closest('button[data-copy],button[data-send],button[data-torrent]');if(!b)return;
@@ -125,7 +125,7 @@ $('results').onclick=async e=>{
  if(b.hasAttribute('data-send')){chosenRecord=x;$('sendTitle').textContent=x.title;$('sendMessage').textContent='';
    $('sendChoices').innerHTML=cfg.servers.map(s=>'<button class="btn" data-send-server="'+esc(s.id)+'">↗ '+esc(s.name)+'</button>').join('')||'Не добавлено ни одного TorrServer';
    $('sendDialog').showModal();return}
- if(b.hasAttribute('data-torrent')){downloadRecord=x;$('downloadMessage').textContent=x.has_torrent_file?'':'Возможно, источник предоставляет только magnet. Тогда оригинальный .torrent скачать нельзя.';$('downloadDialog').showModal();return}
+ if(b.hasAttribute('data-torrent')){if(!x.has_torrent_file){toast('Источник предоставил только magnet; исходный .torrent скачать нельзя',true);return}downloadRecord=x;$('downloadMessage').textContent='';$('downloadDialog').showModal();return}
  b.disabled=true;
  try{let magnet=await getMagnet(x);try{await navigator.clipboard.writeText(magnet);toast('Magnet скопирован')}catch{prompt('Скопируйте magnet:',magnet)}}
  catch(err){node.querySelector('[data-message]').textContent=err.message;toast(err.message,true)}finally{b.disabled=false}
