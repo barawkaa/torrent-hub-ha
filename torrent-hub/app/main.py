@@ -10,6 +10,7 @@ import secrets
 import time
 import re
 import uuid
+import hashlib
 import xml.etree.ElementTree as ET
 from collections import deque
 from contextlib import asynccontextmanager
@@ -17,7 +18,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from core import (BencodeError, btih, choose_routes, fetch, magnet_for, magnet_from_torrent,
@@ -271,7 +272,7 @@ async def check_prowlarr() -> dict:
 async def run_check(category='all',entry=None,draft=None):
     proxy=config['proxy'].copy()
     if category=='proxy':
-        value=await check_proxy(draft or proxy)
+        value=await check_proxy({**proxy,**(draft or {}),'password':(draft or {}).get('password') or proxy.get('password','')})
     elif category=='prowlarr':
         value=await check_prowlarr()
     elif category=='server':
@@ -349,6 +350,10 @@ class Test(BaseModel):
 
 @app.get('/')
 async def index(): return FileResponse(BASE/'static'/'index.html')
+
+@app.get('/icon.png')
+async def icon():
+    return FileResponse(BASE/'static'/'icon.png',media_type='image/png')
 
 @app.get('/healthz')
 async def health(): return {'ok':True,'component':'torrent-hub'}
@@ -559,6 +564,7 @@ def cache_items(items):
         token=uuid.uuid4().hex
         SEARCH_CACHE[token]=(now,item.copy())
         displayed=item.copy();displayed['id']=token
+        displayed['has_torrent_file']=bool(item.get('download','').startswith(('http://','https://')))
         displayed.pop('download',None);displayed.pop('indexer_id',None)
         result.append(displayed)
     return result
@@ -651,6 +657,65 @@ async def resolve(payload:Resolve):
         item['magnet']=magnet;item['hash']=magnet_hash(magnet)
         return {'magnet':magnet}
     except Exception as exc:raise HTTPException(502,'Не удалось получить magnet: '+str(exc)[:220])
+
+
+
+# Torrent bytes must be obtained from the origin, never fabricated from a magnet.
+# A magnet/infohash alone does not contain the piece hashes and file layout of a .torrent.
+async def torrent_file_for(token: str) -> tuple[bytes,str]:
+    r=SEARCH_CACHE.get(token)
+    if not r or time.monotonic()-r[0]>900:
+        raise HTTPException(404,'Раздача устарела. Повтори поиск.')
+    item=r[1]
+    link=str(item.get('download') or '')
+    if not link.startswith(('http://','https://')):
+        raise HTTPException(409,'Источник предоставил только magnet, исходного .torrent нет.')
+    try:
+        u=urlsplit(link)
+        if u.hostname in ('localhost','127.0.0.1') and u.port==9696 and u.path.startswith('/api/v1/indexer/'):
+            resp=await prowlarr('GET',u.path+('?' + u.query if u.query else ''))
+        else:
+            resp=await fetch(config['proxy'],item.get('route','inherit'),link,timeout=28)
+        raw=resp.content
+        if len(raw)>5_242_880:
+            raise ValueError('Файл больше допустимых 5 МБ')
+        magnet_from_torrent(raw) # validates the complete torrent, rejects HTML/errors
+        name='torrenthub-'+hashlib.sha1(raw).hexdigest()[:18]+'.torrent'
+        return raw,name
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502,'Не удалось получить .torrent: '+str(exc)[:210])
+
+
+@app.get('/api/torrent/{token}')
+async def download_torrent(token: str):
+    raw,name=await torrent_file_for(token)
+    return Response(raw,media_type='application/x-bittorrent',
+                    headers={'Content-Disposition':f'attachment; filename="{name}"',
+                             'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
+
+@app.post('/api/torrent/{token}/save-media')
+async def save_torrent_to_media(token: str):
+    raw,name=await torrent_file_for(token)
+    target_dir=pathlib.Path('/media/TorrentHub')
+    try:
+        target_dir.mkdir(parents=True,exist_ok=True)
+        path=target_dir/name
+        if path.exists():
+            # Never overwrite a file already saved by the user.
+            for i in range(1,1001):
+                candidate=target_dir/(path.stem+f'-{i}.torrent')
+                if not candidate.exists():
+                    path=candidate;break
+            else:raise ValueError('Слишком много файлов с одинаковым именем')
+        with path.open('xb') as handle:
+            handle.write(raw)
+        publish('Сохранён torrent-файл в /media/TorrentHub')
+        return {'ok':True,'path':str(path),'bytes':len(raw)}
+    except (OSError,ValueError) as exc:
+        raise HTTPException(507,'Не удалось сохранить в /media: '+str(exc)[:190])
 
 
 @app.post('/api/send')

@@ -62,7 +62,11 @@ def main():
                 print('Torrent Hub API stopped:',api.returncode,flush=True)
                 break
             if engine.poll() is not None and time.time()-last_restart>15:
-                print('Prowlarr stopped; restarting after 10 seconds',flush=True)
+                print('Prowlarr stopped (exit '+str(engine.returncode)+'); restarting after 10 seconds',flush=True)
+                try:
+                    latest=(Path('/data/torrent-hub')/'engine.log').read_text('utf-8',errors='replace').splitlines()[-15:]
+                    print('Prowlarr recent output: '+' | '.join(latest)[-1800:],flush=True)
+                except Exception:pass
                 time.sleep(10)
                 if not running:break
                 engine=launch_engine()
