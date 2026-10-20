@@ -114,15 +114,58 @@ def parse_nnmclub(html:str,base:str)->list[dict]:
           date_iso(date.get_text(" ",strip=True)) if date else ""))
     return result
 
+
+def parse_custom(html: str, base: str, tracker: dict) -> list[dict]:
+    """Declarative CSS selectors; no user-supplied Python/JS code is executed."""
+    ensure_document(html, tracker.get("name","Custom"))
+    spec = tracker.get("adapter",{})
+    soup = BeautifulSoup(html[:2_000_000],"html.parser")
+    try:
+        rows = soup.select(spec["row"])
+    except Exception as exc:
+        raise ValueError("Ошибка CSS-селектора строк: "+str(exc)[:80])
+    found = []
+    def extract(row,key,attr=None):
+        selector = spec.get(key,"")
+        if not selector:
+            return ""
+        element = row.select_one(selector)
+        if not element:
+            return ""
+        return (element.get(attr) or "") if attr else element.get_text(" ",strip=True)
+    for row in rows[:150]:
+        try:
+            title=extract(row,"title")
+            if not title: continue
+            detail=extract(row,"details","href")
+            magnet=extract(row,"magnet","href")
+            download=extract(row,"download","href")
+            url_download=urljoin(base,download) if download and not download.startswith("magnet:") else download
+            found.append(make_row(title,tracker["name"],urljoin(base,detail) if detail else "",
+                                  magnet if magnet.startswith("magnet:?") else "",
+                                  url_download,human_size(extract(row,"size")),
+                                  number(extract(row,"seeders")),date_iso(extract(row,"date"))))
+        except (ValueError,AttributeError):
+            continue
+    return found
+
+
 PARSERS={"rutor":parse_rutor,"megapeer":parse_megapeer,"nnmclub":parse_nnmclub}
 
 async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
     kind=str(tracker.get("kind","")).lower()
-    if kind not in PARSERS:raise ValueError("Неизвестный прямой трекер: "+kind)
-    base=str(tracker.get("url","") or TRACKERS[kind]["url"]).rstrip("/")
+    if kind not in PARSERS and kind!="custom":raise ValueError("Неизвестный прямой трекер: "+kind)
+    base=str(tracker.get("url","") or TRACKERS.get(kind,{}).get("url","")).rstrip("/")
     external_url_guard(base)
     route=tracker.get("route","inherit")
-    if kind=="rutor":
+    if kind=="custom":
+        pattern=str(tracker.get("adapter",{}).get("path",""))
+        if not pattern.startswith("/") or pattern.startswith("//") or "{query}" not in pattern:
+            raise ValueError("Адрес поиска: путь должен начинаться с / и содержать {query}")
+        url=base+pattern.replace("{query}",quote(query.strip(),safe=""))
+        response=await fetch(proxy,route,url,timeout=24,headers=COMMON_HEADERS)
+        html=response.content.decode(tracker.get("adapter",{}).get("encoding","utf-8"),errors="replace")
+    elif kind=="rutor":
         url=base+"/search/0/0/100/0/"+quote(query.strip(),safe="")
         response=await fetch(proxy,route,url,timeout=24,headers=COMMON_HEADERS)
         html=response.content.decode(response.encoding or "utf-8",errors="replace")
@@ -135,7 +178,7 @@ async def search_tracker(tracker:dict,proxy:dict,query:str)->list[dict]:
             {"f[]":"-1","o":"10","s":"0","tm":"-1","shf":"1","sha":"1","ta":"-1","sns":"-1","sds":"4","nm":query,"submit":"Поиск"},encoding="cp1251").encode("ascii"),
                             headers={**COMMON_HEADERS,"Content-Type":"application/x-www-form-urlencoded"},timeout=24)
         html=response.content.decode("cp1251",errors="replace")
-    items=PARSERS[kind](html,base)
+    items=parse_custom(html,base,tracker) if kind=="custom" else PARSERS[kind](html,base)
     for item in items:
         item["source_id"]=tracker.get("id",kind)
         item["route"]=route

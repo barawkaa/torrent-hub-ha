@@ -469,14 +469,37 @@ def update_config(old,body):
         if not isinstance(candidates,list) or len(candidates)>12:raise ValueError('Слишком много трекеров')
         known=set();arr=[]
         for item in candidates:
-            kind=item.get('kind','')
-            if kind not in TRACKERS or kind in known:raise ValueError('Неподдерживаемый или повторный тип трекера')
-            known.add(kind)
-            arr.append({'id':kind,'kind':kind,'name':TRACKERS[kind]['name'],
-                        'url':sanitize_url(item.get('url',TRACKERS[kind]['url'])),
-                        'enabled':bool(item.get('enabled',True)),
-                        'route':item.get('route','inherit')})
-            if arr[-1]['route'] not in ('inherit','proxy','direct','auto'):raise ValueError('Неверный маршрут')
+            kind=str(item.get('kind',''))
+            ident=str(item.get('id',''))
+            if kind not in (*TRACKERS.keys(),'custom') or not re.fullmatch(r'[a-zA-Z0-9_-]{1,40}',ident) or ident in known:
+                raise ValueError('Неподдерживаемый или повторный трекер')
+            if kind!='custom' and ident!=kind:raise ValueError('Неверный ID стандартного трекера')
+            known.add(ident)
+            name=TRACKERS[kind]['name'] if kind in TRACKERS else str(item.get('name','')).strip()[:70]
+            if not name:raise ValueError('Укажи название трекера')
+            record={'id':ident,'kind':kind,'name':name,
+                    'url':sanitize_url(item.get('url',TRACKERS.get(kind,{}).get('url',''))),
+                    'enabled':bool(item.get('enabled',True)),
+                    'route':item.get('route','inherit')}
+            if record['route'] not in ('inherit','proxy','direct','auto'):raise ValueError('Неверный маршрут')
+            if kind=='custom':
+                adapter=item.get('adapter',{})
+                if not isinstance(adapter,dict):raise ValueError('Неверное описание CSS-адаптера')
+                required=['path','row','title']
+                for key in required:
+                    if not isinstance(adapter.get(key),str) or not 1<=len(adapter[key])<=180:
+                        raise ValueError('Не заполнен параметр адаптера: '+key)
+                if not adapter['path'].startswith('/') or adapter['path'].startswith('//') or '{query}' not in adapter['path']:
+                    raise ValueError('Путь поиска должен начинаться с / и содержать {query}')
+                allowed=['path','row','title','details','magnet','download','size','seeders','date','encoding']
+                record['adapter']={}
+                for key in allowed:
+                    val=str(adapter.get(key,'')).strip()
+                    if len(val)>180:raise ValueError('Слишком длинное поле адаптера')
+                    record['adapter'][key]=val
+                if record['adapter']['encoding'] not in ('','utf-8','cp1251'):
+                    raise ValueError('Поддерживаются UTF-8 и Windows-1251')
+            arr.append(record)
         out['direct_trackers']=arr
     if 'remote' in body:
         access=body['remote']
