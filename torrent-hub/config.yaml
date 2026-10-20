@@ -1,5 +1,5 @@
 name: Torrent Hub
-version: "3.0.0"
+version: "3.0.1"
 image: "ghcr.io/barawkaa/torrent-hub-ha"
 slug: torrent_hub
 description: "Самостоятельный поиск торрентов: трекеры, агрегаторы, прокси, TorrServer"
@@ -13,7 +13,7 @@ ingress_port: 8765
 ports:
   8766/tcp: 8766
 ports_description:
-  8766/tcp: Torrent Hub — отдельный защищённый веб-интерфейс для Keenetic и Android
+  8766/tcp: Torrent Hub — локальный веб-интерфейс без авторизации
 panel_icon: mdi:movie-search
 panel_title: Torrent Hub
 panel_admin: true
