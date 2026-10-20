@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import pathlib
+import shutil
 import secrets
 import time
 import re
@@ -44,7 +45,7 @@ DEFAULT_TRACKERS=('rutor','noname-club','megapeer')
 
 
 def defaults():
-    return {'version':3,'proxy': {'mode':'proxy','type':'socks5','host':'192.168.1.100','port':2080,'username':'','password':''},
+    return {'version':3,'proxy': {'mode':'direct','type':'socks5','host':'','port':0,'username':'','password':''},
             'sources':[
                 {'id':'jr-maxvol','name':'jr.maxvol.pro','url':'https://jr.maxvol.pro','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
                 {'id':'jac-black','name':'jac.black','url':'https://jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
@@ -338,6 +339,21 @@ async def initialise_indexers():
         await asyncio.sleep(75)
 
 
+def purge_expired():
+    now=time.monotonic()
+    ttl=max(1,int(config['search'].get('cache_minutes',10)))*60
+    for key,(created,_) in list(SEARCH_CACHE.items()):
+        if now-created>ttl:SEARCH_CACHE.pop(key,None)
+    for key,job in list(JOBS.items()):
+        if now-job['created']>ttl:JOBS.pop(key,None)
+
+
+async def cache_sweeper():
+    while True:
+        purge_expired()
+        await asyncio.sleep(60)
+
+
 async def monitoring():
     while True:
         try:
@@ -349,7 +365,7 @@ async def monitoring():
 
 @asynccontextmanager
 async def lifespan(_app):
-    tasks=[asyncio.create_task(monitoring())]
+    tasks=[asyncio.create_task(monitoring()),asyncio.create_task(cache_sweeper())]
     yield
     for task in tasks:
         task.cancel()
@@ -651,6 +667,33 @@ async def get_cache():return cache_stats()
 async def clear_cache():
     removed=len(SEARCH_CACHE);SEARCH_CACHE.clear();JOBS.clear()
     return {'ok':True,'deleted':removed,'cache':cache_stats()}
+
+def legacy_bytes():
+    if not P_DATA.exists():return 0
+    size=0
+    for root,dirs,files in os.walk(P_DATA,followlinks=False):
+        for name in files:
+            try:size+=(pathlib.Path(root)/name).stat().st_size
+            except OSError:pass
+    return size
+
+
+@app.get('/api/storage')
+async def storage_info():
+    return {'current_search_database_bytes':0,'legacy_prowlarr_bytes':legacy_bytes(),
+            'legacy_path':str(P_DATA) if P_DATA.exists() else None}
+
+
+@app.delete('/api/storage/legacy-prowlarr')
+async def delete_legacy_storage():
+    # Never touch Torrent Hub settings under /data/torrent-hub.
+    if P_DATA.resolve()!=pathlib.Path('/data/prowlarr').resolve():
+        raise HTTPException(400,'Небезопасный путь старых данных')
+    before=legacy_bytes()
+    if P_DATA.exists():
+        shutil.rmtree(P_DATA)
+    publish('Пользователь удалил старые файлы Prowlarr; настройки Torrent Hub сохранены')
+    return {'ok':True,'bytes_deleted':before}
 
 
 async def run_search_once(payload:Search):
