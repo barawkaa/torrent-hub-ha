@@ -67,7 +67,12 @@ def authenticated(request: Request) -> bool:
 
 def same_origin(request: Request) -> bool:
     origin = request.headers.get("origin")
-    return not origin or urlsplit(origin).netloc.lower() == request.headers.get("host","").lower()
+    if not origin:return True
+    candidate=urlsplit(origin).netloc.lower()
+    host=request.headers.get("host","").lower()
+    forwarded=request.headers.get("x-forwarded-host","").split(",")[0].strip().lower()
+    # Reverse proxies such as Keenetic may rewrite Host but preserve X-Forwarded-Host.
+    return candidate==host or bool(forwarded and candidate==forwarded)
 
 @external_app.middleware("http")
 async def access_control(request: Request, call_next):
