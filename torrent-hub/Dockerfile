@@ -1,6 +1,6 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base-python:3.13-alpine3.22
 FROM ${BUILD_FROM}
-ARG BUILD_VERSION=2.0.0-rc1
+ARG BUILD_VERSION=2.0.0
 LABEL io.hass.version="${BUILD_VERSION}" io.hass.type="app" io.hass.arch="aarch64" \
   org.opencontainers.image.source="https://github.com/barawkaa/torrent-hub-ha"
 WORKDIR /app
