@@ -1,7 +1,7 @@
 name: Torrent Hub
 version: "1.1.1"
 slug: torrent_hub
-description: Самостоятельный поиск торрентов: трекеры, агрегаторы, прокси, TorrServer
+description: "Самостоятельный поиск торрентов: трекеры, агрегаторы, прокси, TorrServer"
 arch:
   - aarch64
 startup: services
