@@ -1,0 +1,81 @@
+name: Validate Torrent Hub 3.2.0 and Android 1.1.0
+on:
+  push:
+    branches: [release/torrent-hub-3.2.0-android-1.1.0]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backend-and-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify backend and browser scripts
+        run: |
+          python -m pip install -r torrent-hub/requirements.txt pytest
+          python -m compileall -q torrent-hub/app
+          python -m pytest -q tests
+          python - <<'PY'
+          import pathlib,re
+          page=pathlib.Path('torrent-hub/app/static/index.html').read_text()
+          script=re.search(r'<script>(.*)</script>',page,re.S)
+          assert script, 'Main JavaScript missing'
+          pathlib.Path('/tmp/torrent-hub-inline.js').write_text(script.group(1))
+          assert 'src="filters.js"' in page
+          assert 'advancedSearch' not in page
+          assert 'Данные предыдущей версии' not in page
+          PY
+          node --check /tmp/torrent-hub-inline.js
+          node --check torrent-hub/app/static/filters.js
+          node scripts/test_search_filters.js
+  android-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Compile Android 9-compatible app and test URI parsing
+        run: |
+          cd android
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+      - name: Validate compilation artifact (not a public release)
+        run: |
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -t android/app/build/outputs/apk/debug/app-debug.apk >/dev/null
+  arm64-smoke:
+    runs-on: ubuntu-24.04-arm
+    needs: backend-and-ui
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ARM64 Home Assistant app
+        uses: docker/build-push-action@v6
+        with:
+          context: ./torrent-hub
+          platforms: linux/arm64
+          load: true
+          push: false
+          provenance: false
+          tags: torrent-hub-candidate:3.2.0
+      - name: Smoke test live HTTP interfaces without external trackers
+        run: |
+          docker run -d --name th-candidate --tmpfs /data:rw,size=64m -p 18766:8766 torrent-hub-candidate:3.2.0
+          trap 'docker logs --tail 90 th-candidate || true; docker rm -f th-candidate || true' EXIT
+          for n in $(seq 1 20); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18766/healthz >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:18766/filters.js | grep -q 'TorrentFilters'
+          curl -fsS http://127.0.0.1:18766/api/config | python3 -c 'import json,sys; c=json.load(sys.stdin); assert c["smart"]["min_size"]==7 and c["smart"]["max_size"]==150'
+          curl -fsS http://127.0.0.1:18766/ | grep -q 'resultFilters'

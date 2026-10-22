@@ -51,12 +51,12 @@ def defaults():
                 {'id':'jr-maxvol','name':'jr.maxvol.pro','url':'https://jr.maxvol.pro','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
                 {'id':'jac-black','name':'jac.black','url':'https://jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
                 {'id':'ru-jac-black','name':'ru.jac.black','url':'https://ru.jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
-                {'id':'knaben','name':'Knaben API','url':'https://api.knaben.org/v1','enabled':True,'group':'public','route':'inherit','kind':'knaben'}],
+                {'id':'knaben','name':'Knaben API','url':'https://api.knaben.org','enabled':True,'group':'public','route':'inherit','kind':'knaben_v2'}],
             'servers':[
                 {'id':'lg','name':'LG — приставка','url':'http://192.168.1.148:8090','username':'','password':''},
                 {'id':'ha','name':'Home Assistant','url':'http://192.168.1.100:8090','username':'','password':''}],
             'search':{'enable_prowlarr':False,'check_interval':900,'max_results':300,'remember_history':False,'include_public':True,'cache_minutes':10,'cache_max':350},
-            'smart':{'min_size':5,'max_size':10,'min_seeders':10,'quality':'all','strict':False,'profile':'balanced'},
+            'smart':{'min_size':7,'max_size':150,'min_seeders':10,'quality':'all','strict':False,'profile':'balanced'},
             'direct_trackers':[{'id':k,'kind':k,'name':v['name'],'url':v['url'],'enabled':not bool(v.get('requires_auth')),'route':'inherit','cookie':'','username':'','password':''} for k,v in TRACKERS.items()]}
 
 
@@ -77,7 +77,15 @@ def load():
             value['search'].setdefault('cache_max',350)
             value.pop('remote',None)
             value.setdefault('smart',defaults()['smart'])
+            # Upgrade only old default values, retaining user customization.
+            if (value['smart'].get('min_size'), value['smart'].get('max_size')) == (5, 10):
+                value['smart']['min_size']=7
+                value['smart']['max_size']=150
             value.setdefault('direct_trackers',defaults()['direct_trackers'])
+            # Upgrade only the unmodified built-in Knaben endpoint.
+            for src in value.get('sources',[]):
+                if (src.get('id')=='knaben' and src.get('kind')=='knaben' and src.get('url')=='https://api.knaben.org/v1'):
+                    src.update(kind='knaben_v2',url='https://api.knaben.org')
             if value.get('version',1)<4:
                 existing={t.get('id') for t in value['direct_trackers']}
                 for default in defaults()['direct_trackers']:
@@ -186,6 +194,26 @@ async def search_external(src:dict,proxy:dict,query:str) -> list[dict]:
                   'magnetUrl':row.get('magnetUrl'), 'size':row.get('bytes'),
                   'seeders':row.get('seeders'), 'leechers':row.get('peers'),
                   'url':row.get('details'), 'tracker':row.get('cachedOrigin'),'date':row.get('date')}
+                 for row in obj if isinstance(row,dict)]
+    elif kind=='knaben_v2':
+        endpoint=url if url.endswith('/v2/search') else url.rstrip('/')+'/v2/search'
+        r=await fetch(proxy,route,endpoint,params={'q':query,'s':100},timeout=22)
+        response=r.json()
+        if isinstance(response,dict):
+            obj=next((response[k] for k in ('hits','results','data','items','torrents')
+                      if isinstance(response.get(k),list)),None)
+        else:obj=response
+        if isinstance(obj,list):
+            obj=[{'title':row.get('title') or row.get('name'),
+                  'infoHash':row.get('hash') or row.get('infoHash') or row.get('info_hash'),
+                  'magnetUrl':row.get('magnetUrl') or row.get('magnet'),
+                  'size':row.get('bytes') or row.get('size'),
+                  'seeders':row.get('seeders') or row.get('seeds'),
+                  'leechers':row.get('peers') or row.get('leechers'),
+                  'url':row.get('details') or row.get('url'),
+                  'tracker':row.get('cachedOrigin') or row.get('tracker'),
+                  'date':row.get('date') or row.get('created'),
+                  'name':row.get('name'),'year':row.get('year')}
                  for row in obj if isinstance(row,dict)]
     elif kind=='torznab':
         endpoint=url if url.endswith('/api') else url+'/api'
@@ -421,6 +449,11 @@ class Test(BaseModel):
 @app.get('/')
 async def index(): return FileResponse(BASE/'static'/'index.html')
 
+@app.get('/filters.js')
+async def search_filters_script():
+    return FileResponse(BASE/'static'/'filters.js',media_type='application/javascript',
+                        headers={'Cache-Control':'no-cache'})
+
 @app.get('/manifest.webmanifest')
 async def pwa_manifest():
     return FileResponse(BASE/'static'/'manifest.webmanifest',media_type='application/manifest+json',
@@ -473,7 +506,7 @@ def update_config(old,body):
                     'kind':item.get('kind','jacred'),
                     'api_key':str(item.get('api_key') or previous.get(uid,{}).get('api_key',''))[:256]})
                 if item.get('clear_api_key'):row['api_key']=''
-                if row['group'] not in ('main','public') or row['route'] not in ('inherit','direct','proxy','auto') or row['kind'] not in ('jacred','knaben','torznab'):
+                if row['group'] not in ('main','public') or row['route'] not in ('inherit','direct','proxy','auto') or row['kind'] not in ('jacred','knaben','knaben_v2','torznab'):
                     raise ValueError('Неверный тип поискового источника')
             else:
                 row['username']=str(item.get('username',''))[:120]

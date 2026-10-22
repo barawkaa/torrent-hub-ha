@@ -65,6 +65,14 @@ def magnet_for(hashcode: str, title: str = '', trackers: list[str] | None = None
     return 'magnet:?' + urllib.parse.urlencode(q)
 
 
+def _year(value) -> int:
+    try:
+        year=int(value)
+        return year if 1888 <= year <= datetime.now(timezone.utc).year+2 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def result_of(row: dict, source: str) -> dict:
     title = str(row.get('title') or row.get('name') or row.get('label') or 'Без названия')[:400]
     magnet = str(row.get('magnet') or row.get('magnetUrl') or '')
@@ -82,6 +90,14 @@ def result_of(row: dict, source: str) -> dict:
                 pass
         return 0
     return {'title': title, 'source': source,
+            'name': str(row.get('name') or '')[:180],
+            'originalname': str(row.get('originalname') or row.get('originalName') or '')[:180],
+            'release_year': _year(row.get('relased') or row.get('released') or row.get('year')),
+            'video_quality': str(row.get('quality') or '')[:30],
+            'video_type': str(row.get('videotype') or row.get('videoType') or '')[:40],
+            'voices': str(row.get('voices') or row.get('voice') or '')[:180],
+            'country': str(row.get('country') or '')[:100],
+            'content_types': row.get('types')[:12] if isinstance(row.get('types'),list) else [],
             'tracker': str(row.get('tracker') or row.get('indexer') or source)[:120],
             'size': integer('size', 'sizeBytes'), 'seeders': integer('seeders','sid','seeds'),
             'leechers': integer('leechers','pir','peers'),
@@ -106,6 +122,13 @@ def merge_results(groups: list[list[dict]], limit=300) -> list[dict]:
                     unique[key] = {**x,'source_names':origin}
                 else:
                     old['source_names']=origin
+                # Preserve available structured metadata even if the other provider
+                # supplied a better magnet link or more seeders.
+                winner=unique[key]
+                for field in ('name','originalname','release_year','video_quality',
+                              'video_type','voices','country','content_types'):
+                    if not winner.get(field) and (x if winner is old else old).get(field):
+                        winner[field]=(x if winner is old else old)[field]
     return sorted(unique.values(), key=lambda a:(bool(a['magnet']),a['seeders'],a['size']), reverse=True)[:limit]
 
 
@@ -175,7 +198,19 @@ async def fetch(proxy_cfg: dict, mode: str, url: str, *, params=None, method='GE
                     req_params=None
                 raise RuntimeError('Слишком много перенаправлений')
         except (httpx.HTTPError, ValueError, RuntimeError) as exc:
-            errors.append(f'{route}: {str(exc)[:140]}')
+            if isinstance(exc,httpx.TimeoutException):
+                cause='таймаут соединения или ответа сервера'
+            elif isinstance(exc,httpx.HTTPStatusError):
+                cause='HTTP '+str(exc.response.status_code)
+                if exc.response.status_code in (403,429):
+                    cause+=' (доступ ограничен или требуется проверка сайта)'
+            elif isinstance(exc,httpx.ProxyError):
+                cause='ошибка подключения к прокси: '+str(exc)[:100]
+            elif isinstance(exc,httpx.ConnectError):
+                cause='ошибка подключения или DNS: '+str(exc)[:100]
+            else:
+                cause=(str(exc) or type(exc).__name__)[:140]
+            errors.append(f'{route}: {cause}')
     raise RuntimeError('; '.join(errors))
 
 

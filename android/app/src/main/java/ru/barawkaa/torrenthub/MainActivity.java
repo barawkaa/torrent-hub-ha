@@ -46,6 +46,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.net.URI;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.io.IOException;
+import android.view.WindowInsets;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.List;
@@ -72,6 +76,9 @@ public final class MainActivity extends Activity {
     private WebView web;
     private ProgressBar progress;
     private EditText addressField;
+    private EditText remoteAddressField;
+    private int connectionGeneration=0;
+    private boolean resumedOnce=false;
     private EditText nameField;
     private Spinner chooser;
     private final List<ServerProfile> profiles = new ArrayList<>();
@@ -84,8 +91,10 @@ public final class MainActivity extends Activity {
     private boolean isTv;
 
     private static final class ServerProfile {
-        String name, url;
-        ServerProfile(String name, String url) { this.name=name; this.url=url; }
+        String name, url, remoteUrl;
+        ServerProfile(String name, String url, String remoteUrl) {
+            this.name=name; this.url=url; this.remoteUrl=remoteUrl;
+        }
     }
 
     @Override public void onCreate(Bundle savedInstanceState) {
@@ -93,21 +102,27 @@ public final class MainActivity extends Activity {
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         isTv = ((UiModeManager) getSystemService(Context.UI_MODE_SERVICE))
                 .getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
-        if (isTv) {
-            getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-        }
+        // No immersive TV-only mode: Ugoos devices use the ordinary Android mouse UI.
         getWindow().setStatusBarColor(COLOR_BG);
         getWindow().setNavigationBarColor(COLOR_BG);
         root = new FrameLayout(this);
         root.setBackgroundColor(COLOR_BG);
+        if (Build.VERSION.SDK_INT >= 35) {
+            // Android 15 enforces edge-to-edge for targetSdk 35. Never place
+            // the server/refresh toolbar beneath the status bar or gesture area.
+            root.setOnApplyWindowInsetsListener((view, insets) -> {
+                android.graphics.Insets safe = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+                return insets;
+            });
+        }
         setContentView(root);
         loadProfiles();
         int previous = prefs.getInt("active", -1);
         if (previous >= 0 && previous < profiles.size()) {
             selectedIndex = previous;
-            showWeb(profiles.get(previous).url);
+            connectProfile(profiles.get(previous));
         } else showSettings();
     }
 
@@ -118,7 +133,9 @@ public final class MainActivity extends Activity {
             for (int i=0; i<Math.min(12, values.length()); i++) {
                 JSONObject o=values.getJSONObject(i);
                 String url=ServerAddress.normalize(o.getString("url"));
-                profiles.add(new ServerProfile(o.optString("name", "Сервер"), url));
+                String remote=o.optString("remote_url","");
+                if(!remote.isEmpty())remote=ServerAddress.normalize(remote);
+                profiles.add(new ServerProfile(o.optString("name", "Сервер"), url,remote));
             }
         } catch (Exception ignored) {
             // Corrupt local preferences do not prevent opening the settings page.
@@ -131,6 +148,7 @@ public final class MainActivity extends Activity {
             for (ServerProfile p:profiles) {
                 JSONObject obj=new JSONObject();
                 obj.put("name", p.name);obj.put("url", p.url);
+                obj.put("remote_url",p.remoteUrl);
                 json.put(obj);
             }
         } catch (Exception ignored) {}
@@ -195,6 +213,7 @@ public final class MainActivity extends Activity {
 
     private void showSettings() {
         showingSetup=true;
+        connectionGeneration++;
         root.removeAllViews();
         ScrollView scroll=new ScrollView(this);
         scroll.setFillViewport(true);
@@ -225,6 +244,11 @@ public final class MainActivity extends Activity {
         addBlock(panel,text("Адрес или URL сервера",14,COLOR_MUTED),17);
         addressField=entry("IP:порт или https://домен",DEFAULT_ADDRESS,17);
         addBlock(panel,addressField,7);
+        addBlock(panel,text("Внешний адрес (необязательно)",14,COLOR_MUTED),17);
+        remoteAddressField=entry("https://домен или адрес Tailscale","",17);
+        addBlock(panel,remoteAddressField,7);
+        addBlock(panel,text("Сначала проверяется локальный адрес. Если он недоступен, " +
+                "приложение использует внешний. Можно хранить несколько подключений.",13,COLOR_MUTED),8);
 
         TextView examples=text("Примеры:\n192.168.1.100:8766\n100.101.102.103:8766\n192-168-1-100-via1\nhttps://torr.vapity.keenetic.link",13,COLOR_MUTED);
         examples.setLineSpacing(dp(2),1);
@@ -256,9 +280,11 @@ public final class MainActivity extends Activity {
                     ServerProfile selected=profiles.get(position);
                     nameField.setText(selected.name);
                     addressField.setText(selected.url);
+                    remoteAddressField.setText(selected.remoteUrl);
                 } else {
                     nameField.setText("Новый сервер");
                     addressField.setText(DEFAULT_ADDRESS);
+                    remoteAddressField.setText("");
                 }
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
@@ -282,6 +308,11 @@ public final class MainActivity extends Activity {
         String url;
         try {url=ServerAddress.normalize(addressField.getText().toString());}
         catch (IllegalArgumentException e) {addressField.setError(e.getMessage());return;}
+        String remoteUrl="";
+        try {
+            String raw=remoteAddressField.getText().toString().trim();
+            if(!raw.isEmpty())remoteUrl=ServerAddress.normalize(raw);
+        } catch(IllegalArgumentException e) {remoteAddressField.setError(e.getMessage());return;}
         String label=nameField.getText().toString().trim();
         if(label.isEmpty())label="Torrent Hub";
         if(profiles.size()>=12 && chooser.getSelectedItemPosition()>=profiles.size()){
@@ -289,14 +320,56 @@ public final class MainActivity extends Activity {
         }
         int current=chooser.getSelectedItemPosition();
         if(current>=0&&current<profiles.size()){
-            profiles.set(current,new ServerProfile(label,url));
+            profiles.set(current,new ServerProfile(label,url,remoteUrl));
             selectedIndex=current;
         } else {
-            profiles.add(new ServerProfile(label,url));
+            profiles.add(new ServerProfile(label,url,remoteUrl));
             selectedIndex=profiles.size()-1;
         }
         storeProfiles();
-        showWeb(url);
+        connectProfile(profiles.get(selectedIndex));
+    }
+
+    // Real health request, not a Wi-Fi flag: a foreign/captive Wi-Fi does not
+    // imply that the Home Assistant IP belongs to the user's own home.
+    private static boolean reachable(String base) {
+        HttpURLConnection connection=null;
+        try {
+            URL endpoint=new URI(base).resolve("api/cache").toURL();
+            connection=(HttpURLConnection)endpoint.openConnection();
+            connection.setConnectTimeout(2000);
+            connection.setReadTimeout(2500);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestMethod("GET");
+            int code=connection.getResponseCode();
+            String type=connection.getContentType();
+            return code==200 && type!=null && type.toLowerCase(Locale.ROOT).contains("json");
+        }catch(Exception ignored){return false;}
+        finally{if(connection!=null)connection.disconnect();}
+    }
+
+    private void connectProfile(ServerProfile profile) {
+        int generation=++connectionGeneration;
+        showingSetup=false;
+        root.removeAllViews();
+        LinearLayout panel=vertical();
+        panel.setPadding(dp(24),dp(24),dp(24),dp(24));
+        addBlock(panel,text("Подключение к Torrent Hub…",20,COLOR_TEXT),0);
+        addBlock(panel,text("Проверяем локальный и внешний адрес сервера.",14,COLOR_MUTED),10);
+        Button edit=button("Изменить сервер",false);
+        addBlock(panel,edit,18);
+        edit.setOnClickListener(v->showSettings());
+        root.addView(panel,new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,Gravity.CENTER));
+        new Thread(() -> {
+            boolean local=reachable(profile.url);
+            String choice=profile.url;
+            if(!local && !profile.remoteUrl.isEmpty()) choice=profile.remoteUrl;
+            final String url=choice;
+            runOnUiThread(() -> {
+                if(generation==connectionGeneration && !showingSetup)showWeb(url);
+            });
+        },"torrent-hub-connection").start();
     }
 
     private void showWeb(String url) {
@@ -327,7 +400,8 @@ public final class MainActivity extends Activity {
         refresh.setMinHeight(dp(42));refresh.setTextSize(13);
         top.addView(refresh,new LinearLayout.LayoutParams(0,dp(44),1f));
         refresh.setOnClickListener(v->{
-            if(web!=null)web.reload();
+            if(selectedIndex>=0&&selectedIndex<profiles.size())connectProfile(profiles.get(selectedIndex));
+            else if(web!=null)web.reload();
         });
         page.addView(top);
 
@@ -362,6 +436,7 @@ public final class MainActivity extends Activity {
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         WebSettings w=web.getSettings();
         w.setJavaScriptEnabled(true);
+        w.setUserAgentString(w.getUserAgentString()+" TorrentHubAndroid/1.1");
         w.setDomStorageEnabled(true);
         w.setDatabaseEnabled(true);
         w.setDefaultTextEncodingName("UTF-8");
@@ -536,7 +611,13 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onPause(){if(web!=null)web.onPause();super.onPause();}
-    @Override protected void onResume(){super.onResume();if(web!=null)web.onResume();}
+    @Override protected void onResume(){
+        super.onResume();
+        if(web!=null)web.onResume();
+        if(resumedOnce && !showingSetup && selectedIndex>=0 && selectedIndex<profiles.size())
+            connectProfile(profiles.get(selectedIndex));
+        resumedOnce=true;
+    }
     @Override protected void onDestroy(){
         if(web!=null){if(web.getParent()!=null)((ViewGroup)web.getParent()).removeView(web);web.destroy();web=null;}
         super.onDestroy();

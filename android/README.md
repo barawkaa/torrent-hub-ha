@@ -1,39 +1,54 @@
-# Torrent Hub — приложение для Android и Android TV
+# Torrent Hub Android 1.1.0 — release build and connection setup
 
-Это **настоящее устанавливаемое APK**, а не отдельный поисковик. Приложение открывает Torrent Hub, работающий на Home Assistant, через системный Android WebView.
+## Compatibility
 
-## Совместимость
+- Ugoos AM6B Plus and Q4X: Android 9 (API 28), standard Android launcher and mouse.
+- Phone: Android 15 (API 35), correct status/navigation bar insets.
+- The APK remains a thin Java WebView shell; all tracker search happens in the HA add-on.
+- Actual touchscreen/mouse/device validation must be performed after installation. CI verifies compilation, Java unit tests and signature; it cannot emulate the two Ugoos boxes.
 
-- Android **9 (API 28)** на Ugoos AM6B Plus и Q4X; минимальная версия Android 6.
-- Android TV: значок в разделе приложений, управление стрелками/OK/Назад, меню пульта для настройки адреса сервера.
-- Телефоны и планшеты: сенсорное управление, Android System WebView/Chrome.
-- Нет сторонних SDK аналитики, рекламы, авторизации или дублирующей базы торрентов.
+## Connection profiles
 
-## Подключение
+Each saved profile has a **local URL** and an optional **remote URL**. At launch or when resuming, the app checks the local \`api/cache\` endpoint; if it is not reachable and a remote address is defined, it uses the remote one. The check tests the real Torrent Hub API, not Wi-Fi availability alone.
 
-1. Установи APK на Ugoos/телефон (скачай GitHub Release и открой через файловый менеджер; при запросе Android разреши установку из этого источника).
-2. В настройках вставь адрес своего сервера Torrent Hub, например `192.168.1.100:8766`, и нажми **Подключиться**.
-3. Для Keenetic можно ввести `torr.vapity.keenetic.link` — приложение попробует HTTPS по умолчанию (если у Keenetic настроен HTTPS reverse proxy).
-4. Для Tailscale подойдут `100.x.y.z:8766`, `192-168-1-100-via1`, `host.tailnet.ts.net:8766` либо полный URL `http://host.tailnet.ts.net:8766`. Устройство должно иметь доступ к соответствующему адресу (работающий Tailscale/VPN и DNS). Для непубличного MagicDNS-имени приложение не создаёт VPN самостоятельно.
-5. Можно сохранить несколько адресов и выбирать их в настройках. Из открытого WebView нажми **⚙** или кнопку **MENU** на пульте для возвращения к настройкам.
+Examples:
 
-Если адрес без схемы, локальным IP и коротким именам назначается `http://` и порт `8766`, а обычным доменам — `https://`. Любые явные `http://` или `https://` и порты принимаются без изменений.
+- Local: \`http://192.168.1.100:8766\`
+- Remote via HTTPS reverse proxy: \`https://torr.vapity.keenetic.link\`
+- Remote via Tailscale: \`http://100.101.102.103:8766\`
 
-## Производительность и безопасность
+Store multiple profiles through the **Сервер** button. Explicit HTTP/HTTPS URLs are preserved, and Tailscale DNS requires VPN access.
 
-Минимальный Java Android Activity с аппаратно-ускоренным системным WebView; нет второго веб-сервера, React Native или Flutter. При потере сети показываются кнопки повтора подключения и настройки. На Android 9 скачивание `.torrent` может запросить разрешение на папку загрузок.
+**Security:** never port-forward unauthenticated plain HTTP \`:8766\` to the internet. Use a VPN or a properly authenticated HTTPS reverse proxy.
 
-Android WebView намеренно разрешает обычный HTTP для домашних IP; **не открывай незащищённый Torrent Hub на порту 8766 напрямую в интернет**. Если нужен удалённый доступ — используй Tailscale/VPN или защищённую HTTPS-прокси Keenetic с отдельным контролем доступа.
+## Signed Release build
 
-**APK в этом проекте пока тестовый (debug-signature).** Для регулярных обновлений без переустановки и публикации в магазин потребуется постоянный закрытый ключ подписи APK. Не публикуй его в репозитории.
+**Never commit the signing key, its password or an unencrypted copy to GitHub.**
+The automated release requires a *permanent* private key, reused for all subsequent releases. The previous RC1 APK uses a debug certificate, so Android cannot upgrade directly to the release-signed 1.1.0; back up your server URLs and remove RC1 before installing this first stable APK.
 
-## Сборка
+One-time private keystore creation (on a trusted computer):
 
-JDK 17, Android SDK platform 35, Gradle 8.10.2:
+\`\`\`sh
+keytool -genkeypair -v -keystore torrent-hub-release.jks -alias torrenthub -keyalg RSA -keysize 3072 -validity 10000
+\`\`\`
 
-```sh
-cd android
-gradle :app:assembleDebug :app:testDebugUnitTest --no-daemon
-```
+Create the following GitHub repository **Actions Secrets**:
 
-Выходной файл: `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions собирает APK и прикладывает его к релизу, если все проверки прошли.
+- \`TORRENTHUB_RELEASE_KEYSTORE_B64\`: complete base64-encoded contents of the private .jks file
+- \`TORRENTHUB_KEYSTORE_PASSWORD\`
+- \`TORRENTHUB_KEY_ALIAS\` (e.g. \`torrenthub\`)
+- \`TORRENTHUB_KEY_PASSWORD\`
+
+PowerShell example for the base64 secret: \`[Convert]::ToBase64String([IO.File]::ReadAllBytes("torrent-hub-release.jks"))\`.
+
+Save a secure offline backup of the keystore and credentials. Without them no final release APK can be safely published with a permanent signing identity.
+
+Release workflow: \`.github/workflows/publish-android-1.1.0.yml\`.
+Run it from the vetted revision or create tag \`android-v1.1.0\`. It will compile \`assembleRelease\`, cryptographically verify the signature, publish a downloadable APK and a SHA256 manifest. A CI test/debug build is never uploaded as a public release.
+
+## Version
+
+- \`applicationId: ru.barawkaa.torrenthub\`
+- \`minSdk: 23\` (compatible with Android 9)
+- \`targetSdk: 35\` (supports Android 15 insets)
+- \`versionName: 1.1.0\` / \`versionCode: 2\`
