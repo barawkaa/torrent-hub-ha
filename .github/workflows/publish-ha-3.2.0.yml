@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     tags: [ha-v3.2.0]
+    branches: [release/torrent-hub-3.2.0-android-1.1.0]
+    paths: ['.github/workflows/publish-ha-3.2.0.yml']
 permissions:
   contents: read
   packages: write
@@ -36,6 +38,8 @@ jobs:
           push: false
           provenance: false
           tags: ghcr.io/barawkaa/torrent-hub-ha:3.2.0
+          build-args: |
+            BUILD_VERSION=3.2.0
       - name: Smoke test before publishing
         run: |
           docker run -d --name th32 --tmpfs /data:rw,size=64m -p 18766:8766 ghcr.io/barawkaa/torrent-hub-ha:3.2.0
@@ -46,6 +50,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:18766/api/config | python3 -c 'import json,sys;c=json.load(sys.stdin);assert c["smart"]["min_size"]==7 and c["smart"]["max_size"]==150'
           curl -fsS http://127.0.0.1:18766/filters.js | grep -q 'TorrentFilters'
+          test "$(docker image inspect ghcr.io/barawkaa/torrent-hub-ha:3.2.0 --format '{{index .Config.Labels \"io.hass.version\"}}')" = 3.2.0
       - name: Authenticate to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -54,3 +59,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish tested ARM64 image
         run: docker push ghcr.io/barawkaa/torrent-hub-ha:3.2.0
+      - name: Confirm public image download
+        run: |
+          docker logout ghcr.io
+          docker image rm ghcr.io/barawkaa/torrent-hub-ha:3.2.0
+          docker pull ghcr.io/barawkaa/torrent-hub-ha:3.2.0
+          docker image inspect ghcr.io/barawkaa/torrent-hub-ha:3.2.0 --format '{{.Architecture}} {{index .Config.Labels "io.hass.version"}}'

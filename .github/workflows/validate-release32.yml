@@ -92,6 +92,8 @@ jobs:
           push: false
           provenance: false
           tags: torrent-hub-candidate:3.2.0
+          build-args: |
+            BUILD_VERSION=3.2.0
       - name: Smoke test live HTTP interfaces without external trackers
         run: |
           docker run -d --name th-candidate --tmpfs /data:rw,size=64m -p 18766:8766 torrent-hub-candidate:3.2.0
