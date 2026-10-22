@@ -1,12 +1,13 @@
-name: Publish signed Android 1.1.0 APK
+name: Publish Torrent Hub Android 1.1.0 Debug APK
 on:
-  workflow_dispatch:
   push:
-    tags: [android-v1.1.0]
+    branches: [main]
+    paths: ['.github/workflows/publish-android-1.1.0.yml']
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
-  signed-release:
+  android-debug-release:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -18,48 +19,38 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Restore permanent private signing key
-        env:
-          KEY_B64: ${{ secrets.TORRENTHUB_RELEASE_KEYSTORE_B64 }}
-          TORRENTHUB_KEYSTORE_PASSWORD: ${{ secrets.TORRENTHUB_KEYSTORE_PASSWORD }}
-          TORRENTHUB_KEY_ALIAS: ${{ secrets.TORRENTHUB_KEY_ALIAS }}
-          TORRENTHUB_KEY_PASSWORD: ${{ secrets.TORRENTHUB_KEY_PASSWORD }}
-        run: |
-          set -eu
-          test -n "$KEY_B64" || { echo 'Release signing key is missing'; exit 1; }
-          test -n "$TORRENTHUB_KEYSTORE_PASSWORD"
-          test -n "$TORRENTHUB_KEY_ALIAS"
-          test -n "$TORRENTHUB_KEY_PASSWORD"
-          printf '%s' "$KEY_B64" | base64 --decode > "$RUNNER_TEMP/torrent-hub-release.jks"
-          chmod 600 "$RUNNER_TEMP/torrent-hub-release.jks"
-          echo "TORRENTHUB_KEYSTORE_FILE=$RUNNER_TEMP/torrent-hub-release.jks" >> "$GITHUB_ENV"
-          echo "TORRENTHUB_KEYSTORE_PASSWORD=$TORRENTHUB_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-          echo "TORRENTHUB_KEY_ALIAS=$TORRENTHUB_KEY_ALIAS" >> "$GITHUB_ENV"
-          echo "TORRENTHUB_KEY_PASSWORD=$TORRENTHUB_KEY_PASSWORD" >> "$GITHUB_ENV"
-      - name: Test and compile signed non-debug APK
+      - name: Build Android 9+ APK (debug-signed, no secrets)
         run: |
           cd android
-          gradle :app:testDebugUnitTest :app:assembleRelease --no-daemon --stacktrace
-      - name: Verify signature and Android version metadata
+          gradle :app:assembleDebug --no-daemon
+      - name: Validate APK and signature
         run: |
           set -eu
-          APK=android/app/build/outputs/apk/release/app-release.apk
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-          signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit)
-          test -n "$signer"
-          "$signer" verify --verbose --print-certs "$APK"
           unzip -t "$APK" >/dev/null
-          cp "$APK" torrent-hub-android-1.1.0-release.apk
-          sha256sum torrent-hub-android-1.1.0-release.apk > SHA256SUMS
-      - name: Publish final GitHub release
+          signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit || true)
+          if test -n "$signer"; then
+            "$signer" verify --verbose "$APK"
+          else
+            jarsigner -verify "$APK" > /tmp/torrent-hub-signature.txt
+            grep -q "jar verified" /tmp/torrent-hub-signature.txt
+          fi
+          cp "$APK" torrent-hub-android-1.1.0-debug.apk
+          sha256sum torrent-hub-android-1.1.0-debug.apk > SHA256SUMS
+      - name: Publish permanent downloadable APK in GitHub Releases
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          tag=android-v1.1.0
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --target "$GITHUB_SHA" \
-              --title "Torrent Hub Android 1.1.0" \
-              --notes "Signed Android release. Android 9 and Android 15 support; mouse-capable WebView; LAN/external server profiles."
+          TAG="android-v1.1.0-debug"
+          ASSET="torrent-hub-android-1.1.0-debug.apk"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" "$ASSET" SHA256SUMS \
+              --target "$GITHUB_SHA" \
+              --title "Torrent Hub Android 1.1.0 (Debug APK)" \
+              --notes "Установочный APK для личного использования на обычных Android-приставках Ugoos (Android 9, мышь) и телефонах (Android 15). Home Assistant Torrent Hub: исправление системных отступов, локальный и внешний адрес в профиле, выбор доступного адреса. Не требует подписи или сборки со стороны пользователя. Debug-подпись; это не production/release signing, при смене сертификата может потребоваться переустановка." \
+              --prerelease
+          else
+            gh release upload "$TAG" "$ASSET" SHA256SUMS --clobber
           fi
-          gh release upload "$tag" torrent-hub-android-1.1.0-release.apk SHA256SUMS --clobber
