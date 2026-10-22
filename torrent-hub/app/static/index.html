@@ -43,6 +43,7 @@
 <div id="customError" class="msg"></div></dialog><dialog id="indexerDialog" style="background:#142235;border:1px solid #42627a;color:#e8f2ff;border-radius:15px;padding:22px;max-width:660px;width:calc(100% - 24px);max-height:85vh;overflow:auto"><h2 id="indexerDialogTitle">Настроить трекер</h2><p class="muted">Заполни параметры, необходимые для работы. Для публичных трекеров обычно достаточно настроек по умолчанию.</p><div id="indexerConfigFields"></div><div class="toolbar foot"><button class="btn primary" id="submitIndexer">Добавить трекер</button><button class="btn" id="closeIndexer">Отмена</button></div><p class="msg" id="indexerDialogMsg"></p></dialog><dialog id="sendDialog" class="hub-dialog"><h2>Отправить на TorrServer</h2><p id="sendTitle" class="muted"></p><div id="sendChoices" class="choice-list"></div><div class="toolbar foot"><button class="btn" id="cancelSend">Отмена</button></div><div id="sendMessage" class="msg"></div></dialog><dialog id="downloadDialog" class="hub-dialog"><h2>Скачать .torrent</h2><p class="muted">Выбери место сохранения оригинального торрент-файла.</p><div class="choice-list"><button class="btn" id="downloadLocal">↓ На это устройство</button><button class="btn" id="downloadMedia">↓ В Home Assistant — /media/TorrentHub</button></div><p id="downloadMessage" class="msg"></p><div class="toolbar foot"><button class="btn" id="cancelDownload">Отмена</button></div></dialog><div id="toast" class="hidden"></div><script src="filters.js"></script><script>
 'use strict';const $=id=>document.getElementById(id);const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let cfg, checks={}, records=[],cat=[],idx=[],indexerErrors=[],busy=false;let sourceSelections={};let activeJob='';
+let smartEnabled=false, searchStartedAt=0;
 async function api(path,method='GET',body){let r=await fetch('api/'+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});let d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.detail||r.status+' ошибка сервера');return d}
 let tid;function toast(message,bad=false){let e=$('toast');e.textContent=message;e.classList.toggle('bad',bad);e.classList.remove('hidden');clearTimeout(tid);tid=setTimeout(()=>e.classList.add('hidden'),4500)}
 function newID(){return (crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2)).slice(0,16)}
@@ -141,7 +142,7 @@ function rendered(){
  if(smartEnabled)renderSmartResults();
 }
 function renderProgress(providers){let ok=providers.filter(x=>x.state==='ok').length,waiting=providers.filter(x=>x.state==='pending').length;
- $('searchState').innerHTML=`<div class="panel"><div class="flex between"><b>Ход поиска</b><span class="tiny">Источников: ${providers.length} • Завершено: ${providers.length-waiting}</span></div><div class="compact-status">`+providers.map(p=>`<div class="flex between status-line"><span><span class="pill ${p.state==='ok'?'ok':p.state==='error'?'bad':p.state==='empty'?'warn':''}">${p.state==='pending'?'Поиск…':p.state==='ok'?'Найдено':p.state==='empty'?'Пусто':'Ошибка'}</span> ${esc(p.name)}</span><small>${p.state==='pending'?'':p.state==='error'?esc(p.message):p.count+' шт. • '+(p.latency_ms/1000).toFixed(1)+' c'}</small></div>`).join('')+'</div></div>';
+ $('searchState').innerHTML=`<div class="panel"><div class="flex between"><b>Ход поиска</b><span class="tiny">Источников: ${providers.length} • Завершено: ${providers.length-waiting}</span></div><div class="compact-status">`+providers.map(p=>`<div class="flex between status-line"><span><span class="pill ${p.state==='ok'?'ok':p.state==='error'?'bad':p.state==='empty'?'warn':''}">${p.state==='pending'?'Поиск…':p.state==='ok'?'Найдено':p.state==='empty'?'Пусто':'Ошибка'}</span> ${esc(p.name)}</span><small>${p.state==='pending'?'Ожидание '+Math.floor((Date.now()-searchStartedAt)/1000)+' с':p.state==='error'?esc(p.message):p.count+' шт. • '+(p.latency_ms/1000).toFixed(1)+' c'}</small></div>`).join('')+'</div></div>';
 }
 
 $('sort').onchange=rendered;
@@ -171,7 +172,7 @@ $('results').onclick=async e=>{
  catch(err){node.querySelector('[data-message]').textContent=err.message;toast(err.message,true)}finally{b.disabled=false}
 };
 $('smartResults').onclick=$('results').onclick;
-$('searchForm').onsubmit=async e=>{e.preventDefault();if(busy)return;busy=true;rawResults=[];torrentFilters.reset();torrentFilters.setResults([]);$('results').innerHTML='<div class="panel">Ищем по доступным источникам…</div>';$('searchState').textContent='';
+$('searchForm').onsubmit=async e=>{e.preventDefault();if(busy)return;busy=true;searchStartedAt=Date.now();rawResults=[];torrentFilters.reset();torrentFilters.setResults([]);$('results').innerHTML='<div class="panel">Ищем по доступным источникам…</div>';$('searchState').textContent='';
  try{let started=await api('search/start','POST',{query:$('query').value.trim(),include_public:$('includePublic').checked});activeJob=started.job_id;
    for(let n=0;n<110;n++){let r=await api('search/job/'+activeJob);renderProgress(r.providers);if(r.items.length!==rawResults.length||r.done){rawResults=r.items;torrentFilters.setResults(rawResults);rendered()};if(r.done)break;await new Promise(resolve=>setTimeout(resolve,600))}
  }catch(err){$('results').innerHTML='<div class="panel warn-message">'+esc(err.message)+'</div>';if(smartEnabled)$('smartMsg').textContent=err.message}finally{busy=false;if(smartEnabled)renderSmartResults()}};
@@ -267,14 +268,11 @@ $('directTrackerRows').onclick=async e=>{
  let b=e.target.closest('[data-check-tracker]');if(!b)return;
  b.disabled=true;await checkOne(draftTrackers().find(t=>t.id===b.dataset.checkTracker));renderDirectTrackers();renderHealth()
 };
-async function updateLegacyStatus(){try{let d=await api('storage');$('legacyStatus').textContent=d.legacy_prowlarr_bytes?'Старый Prowlarr: '+(d.legacy_prowlarr_bytes/1048576).toFixed(2)+' МБ':'Старых данных Prowlarr нет';$('deleteLegacy').disabled=!d.legacy_prowlarr_bytes}catch(e){$('legacyStatus').textContent=e.message}}
-$('deleteLegacy').onclick=async()=>{if(!confirm('Удалить файлы старого Prowlarr? Настройки Torrent Hub сохранятся.'))return;try{let r=await api('storage/legacy-prowlarr','DELETE');toast('Освобождено '+(r.bytes_deleted/1048576).toFixed(2)+' МБ');await updateLegacyStatus()}catch(e){toast(e.message,true)}};
 async function updateCacheStatus(){try{let c=await api('cache');$('cacheStatus').textContent=c.results+' раздач в памяти; приблизительно '+(c.bytes_estimate/1024).toFixed(1)+' КБ. На диске база: 0 Б.';$('cacheMinutes').value=c.ttl_minutes;$('cacheMax').value=c.max_results}catch(e){$('cacheStatus').textContent=e.message}}
 $('clearCache').onclick=async()=>{try{await api('cache','DELETE');await updateCacheStatus();toast('Кеш очищен')}catch(e){toast(e.message,true)}};
 $('saveCache').onclick=async()=>{if(await save({search:{cache_minutes:+$('cacheMinutes').value,cache_max:+$('cacheMax').value}}))await updateCacheStatus()};
 
 
-let smartEnabled=false;
 const smartNodes=['smartMin','smartMax','smartSeeds','smartQuality','smartProfile','smartStrict'];
 function readSmart(){
  const min=Number($('smartMin').value),max=Number($('smartMax').value);
