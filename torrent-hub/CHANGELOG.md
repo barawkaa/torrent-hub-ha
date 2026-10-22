@@ -3,7 +3,7 @@
 - Smart search default size is 7–150 GiB; only untouched 5–10 GiB saved defaults are migrated.
 - After search, faceted filtering by observed title, year, quality, translation, dubbing studio, video source, codec/HDR, content type, country, file size and seeds.
 - Live tracker/JacRed metadata survives normalization and duplicate merging.
-- User controls aggregator participation with the single existing checkbox; removed provider selection from the advanced search UI.
+- The single checkbox disables or enables all aggregators, including old 'main' entries; removed provider selection from the advanced search UI.
 - Knaben v2 GET-search API support and migration of the default built-in endpoint.
 - Better timeout/HTTP/connection diagnostics for public aggregator APIs, including jac.black. Access depends on each site's real API and network behavior.
 - Removed obsolete Prowlarr cleanup UI without deleting old files or stored user data.

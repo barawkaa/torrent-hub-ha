@@ -778,7 +778,7 @@ async def provider_plan(payload:Search):
         async def live(item=tracker):return await search_tracker(item,cfg['proxy'],payload.query.strip())
         plan.append((ident,tracker['name'],live))
     for src in cfg['sources']:
-        if not src['enabled'] or (src['group']=='public' and not payload.include_public):continue
+        if not src['enabled'] or not payload.include_public:continue
         if payload.selected_sources is not None and src['id'] not in payload.selected_sources:continue
         async def search_one(s=src):return await search_external(s,cfg['proxy'],payload.query.strip())
         plan.append((src['id'],src['name'],search_one))

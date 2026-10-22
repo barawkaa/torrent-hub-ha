@@ -32,6 +32,30 @@ jobs:
           node --check /tmp/torrent-hub-inline.js
           node --check torrent-hub/app/static/filters.js
           node scripts/test_search_filters.js
+      - name: Probe current public APIs (diagnostic only)
+        run: |
+          python - <<'PY'
+          import httpx,time
+          probes=[('jac.black','https://jac.black/api/v1.0/torrents',{'search':'Интерстеллар'}),
+                  ('Knaben v2','https://api.knaben.org/v2/search',{'q':'Interstellar','s':5})]
+          for name,url,params in probes:
+              t=time.monotonic()
+              try:
+                  with httpx.Client(timeout=8,follow_redirects=False) as client:
+                      r=client.get(url,params=params)
+                  print(name,'HTTP',r.status_code,'ms',round((time.monotonic()-t)*1000),
+                        'content-type',r.headers.get('content-type',''),flush=True)
+                  if r.is_success:
+                      try:
+                          obj=r.json()
+                          print(name,'result-shape',type(obj).__name__,
+                                ('keys='+','.join(map(str,list(obj)[:12])) if isinstance(obj,dict)
+                                 else 'items='+str(len(obj))),flush=True)
+                      except ValueError:
+                          print(name,'body is not JSON',flush=True)
+              except Exception as e:
+                  print(name,type(e).__name__,str(e)[:180],flush=True)
+          PY
   android-compile:
     runs-on: ubuntu-latest
     timeout-minutes: 20

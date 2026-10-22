@@ -67,3 +67,12 @@ def test_knaben_v2_request_and_shape(monkeypatch):
     assert observed[0][1]['params']['q']=='Отец'
     assert len(out)==1 and out[0]['seeders']==25
     assert out[0]['release_year']==2020
+
+
+def test_public_checkbox_disables_every_aggregator_even_old_main_group(monkeypatch):
+    cfg=main.defaults()
+    cfg['sources'][0]['group']='main'
+    monkeypatch.setattr(main,'config',cfg)
+    plan=asyncio.run(main.provider_plan(main.Search(query='Отец',include_public=False)))
+    assert len(plan)==sum(x['enabled'] for x in cfg['direct_trackers'])
+    assert all(x[0].startswith('direct:') for x in plan)
