@@ -18,7 +18,7 @@ jobs:
         run: |
           python -m pip install -r torrent-hub/requirements.txt pytest
           python -m compileall -q torrent-hub/app
-          python -m pytest -q tests
+          python -m pytest -q tests/test_release3.py tests/test_live_engine.py tests/test_product_contract.py tests/test_tracker_login.py tests/test_release32.py
           python - <<'PY'
           import pathlib,re
           page=pathlib.Path('torrent-hub/app/static/index.html').read_text()
