@@ -6,6 +6,8 @@ on:
       - 'torrent-hub/**'
       - 'scripts/test_release33_ui.js'
       - 'tests/test_release34.py'
+      - 'tests/test_product_contract.py'
+      - 'tests/test_release32.py'
       - '.github/workflows/publish-ha-3.4.0.yml'
   workflow_dispatch:
 permissions:
