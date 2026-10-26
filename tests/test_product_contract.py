@@ -14,12 +14,13 @@ def run(x):return asyncio.run(x)
 
 def test_first_run_includes_all_public_sources():
     c=main.defaults()
-    assert c['version']==5
+    assert c['version']==6
     assert not c['search']['enable_prowlarr']
     assert len(c['direct_trackers'])==5
     assert sum(t['enabled'] for t in c['direct_trackers'])==3
     assert c['search']['include_public']
-    assert all(x['enabled'] for x in c['sources'])
+    assert sum(x['enabled'] for x in c['sources'])==4
+    assert all(not x['enabled'] for x in c['sources'] if x['id'] in ('torapi','torlock','jacred-su'))
     assert all(x['route']=='inherit' for x in c['sources'])
 
 
@@ -63,7 +64,7 @@ def test_provider_selection_skips_unselected(monkeypatch):
     plan=run(main.provider_plan(main.Search(query='matrix',selected_sources=['jac-black'])))
     assert [x[0] for x in plan]==['jac-black']
     plan2=run(main.provider_plan(main.Search(query='matrix')))
-    assert len(plan2)==len(main.config['sources'])+sum(t['enabled'] for t in main.config['direct_trackers'])
+    assert len(plan2)==sum(s['enabled'] for s in main.config['sources'])+sum(t['enabled'] for t in main.config['direct_trackers'])
 
 
 def test_partial_source_errors_do_not_hide_other_results(monkeypatch):

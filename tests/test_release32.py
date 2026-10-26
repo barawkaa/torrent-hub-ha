@@ -19,13 +19,13 @@ def test_preserve_custom_smart_preferences(monkeypatch,tmp_path):
     state=tmp_path/'state.json'
     cfg=main.defaults()
     cfg['smart'].update(min_size=5,max_size=10)
-    cfg['sources'][-1].update(kind='knaben',url='https://api.knaben.org/v1')
+    next(s for s in cfg['sources'] if s['id']=='knaben').update(kind='knaben',url='https://api.knaben.org/v1')
     state.write_text(json.dumps(cfg),encoding='utf8')
     monkeypatch.setattr(main,'STATE',state)
     upgraded=main.load()
     assert upgraded['smart']['min_size']==7
     assert upgraded['smart']['max_size']==150
-    assert upgraded['sources'][-1]['kind']=='knaben_v2'
+    assert next(s for s in upgraded['sources'] if s['id']=='knaben')['kind']=='knaben_v2'
     cfg['smart'].update(min_size=12,max_size=20)
     state.write_text(json.dumps(cfg),encoding='utf8')
     custom=main.load()
