@@ -1,11 +1,5 @@
 name: Publish Home Assistant Torrent Hub 3.3.0
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'torrent-hub/**'
-      - 'scripts/test_release33_ui.js'
-      - '.github/workflows/publish-ha-3.3.0.yml'
   workflow_dispatch:
 permissions:
   contents: write

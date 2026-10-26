@@ -13,6 +13,7 @@ import re
 import uuid
 import hashlib
 import hmac
+from external_sources import torapi_rows, torapi_detail_magnet
 import xml.etree.ElementTree as ET
 from collections import deque
 from contextlib import asynccontextmanager
@@ -46,12 +47,15 @@ DEFAULT_TRACKERS=('rutor','noname-club','megapeer')
 
 
 def defaults():
-    return {'version':5,'proxy': {'mode':'direct','type':'socks5','host':'','port':0,'username':'','password':''},
+    return {'version':6,'proxy': {'mode':'direct','type':'socks5','host':'','port':0,'username':'','password':''},
             'sources':[
                 {'id':'jr-maxvol','name':'jr.maxvol.pro','url':'https://jr.maxvol.pro','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
                 {'id':'jac-black','name':'jac.black','url':'https://jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
                 {'id':'ru-jac-black','name':'ru.jac.black','url':'https://ru.jac.black','enabled':True,'group':'public','route':'inherit','kind':'jacred'},
-                {'id':'knaben','name':'Knaben API','url':'https://api.knaben.org','enabled':True,'group':'public','route':'inherit','kind':'knaben_v2'}],
+                {'id':'knaben','name':'Knaben API','url':'https://api.knaben.org','enabled':True,'group':'public','route':'inherit','kind':'knaben_v2'},
+                {'id':'torapi','name':'TorAPI — RuTracker, Kinozal, RuTor, NNM','url':'https://torapi.vercel.app','enabled':False,'group':'public','route':'inherit','kind':'torapi'},
+                {'id':'torlock','name':'Torlock — Torznab','url':'https://www.torlock.com/torznab','enabled':False,'group':'public','route':'inherit','kind':'torznab'},
+                {'id':'jacred-su','name':'JacRed.su (резерв)','url':'https://jacred.su','enabled':False,'group':'public','route':'inherit','kind':'jacred'}],
             'servers':[
                 {'id':'lg','name':'LG — приставка','url':'http://192.168.1.148:8090','username':'','password':''},
                 {'id':'ha','name':'Home Assistant','url':'http://192.168.1.100:8090','username':'','password':''}],
@@ -94,7 +98,13 @@ def load():
             for tracker in value.get('direct_trackers',[]):
                 tracker.setdefault('username','')
                 tracker.setdefault('password','')
-            value['version']=5
+            if value.get('version',1)<6:
+                # Add new candidates once, without overriding or enabling saved sources.
+                known={s.get('id') for s in value.get('sources',[])}
+                for item in defaults()['sources']:
+                    if item['id'] in ('torapi','torlock','jacred-su') and item['id'] not in known:
+                        value.setdefault('sources',[]).append(copy.deepcopy(item))
+            value['version']=6
             return value
     return defaults()
 
@@ -184,6 +194,16 @@ async def search_external(src:dict,proxy:dict,query:str) -> list[dict]:
         r=await fetch(proxy,route,endpoint,params=params,timeout=22)
         obj=r.json()
         if isinstance(obj,dict):obj=next((obj[k] for k in ('results','torrents','data','items') if isinstance(obj.get(k),list)),None)
+    elif kind=='torapi':
+        # Public TorAPI: one query aggregates RuTracker/Kinozal/RuTor/NNM.
+        # The title endpoint may omit infohash: resolve by provider and ID lazily.
+        endpoint=url.rstrip('/')+'/api/search/title/all'
+        r=await fetch(proxy,route,endpoint,
+                      params={'query':query,'page':0},timeout=16,
+                      headers={'Accept':'application/json'})
+        if len(r.content)>5_000_000:
+            raise ValueError('TorAPI вернул слишком большой ответ')
+        obj=torapi_rows(r.json())
     elif kind=='knaben':
         endpoint=url if url.endswith('/api/v1') or url.endswith('/v1') else url.rstrip('/')
         r=await fetch(proxy,route,endpoint,method='POST',json={'query':query,'size':100,'hide_unsafe':True},timeout=22)
@@ -245,6 +265,9 @@ async def search_external(src:dict,proxy:dict,query:str) -> list[dict]:
     for row in obj[:250]:
         if isinstance(row,dict):
             found=result_of(row,src['name'])
+            if kind=='torapi':
+                found['torapi_provider']=row.get('torapi_provider','')
+                found['torapi_id']=row.get('torapi_id','')
             found['route']=route
             found['source_id']=src['id']
             out.append(found)
@@ -506,7 +529,7 @@ def update_config(old,body):
                     'kind':item.get('kind','jacred'),
                     'api_key':str(item.get('api_key') or previous.get(uid,{}).get('api_key',''))[:256]})
                 if item.get('clear_api_key'):row['api_key']=''
-                if row['group'] not in ('main','public') or row['route'] not in ('inherit','direct','proxy','auto') or row['kind'] not in ('jacred','knaben','knaben_v2','torznab'):
+                if row['group'] not in ('main','public') or row['route'] not in ('inherit','direct','proxy','auto') or row['kind'] not in ('jacred','knaben','knaben_v2','torznab','torapi'):
                     raise ValueError('Неверный тип поискового источника')
             else:
                 row['username']=str(item.get('username',''))[:120]
@@ -928,6 +951,23 @@ async def resolve(payload:Resolve):
     if not r or time.monotonic()-r[0]>int(config['search'].get('cache_minutes',10))*60:raise HTTPException(404,'Поисковая раздача устарела: повторите поиск')
     item=r[1]
     if item['magnet']:return {'magnet':item['magnet']}
+    if item.get('torapi_provider') and item.get('torapi_id'):
+        src=next((s for s in config.get('sources',[])
+                  if s.get('id')==item.get('source_id') and s.get('kind')=='torapi'),None)
+        if not src:raise HTTPException(409,'TorAPI удалён из настроек источников')
+        try:
+            endpoint=sanitize_url(src['url']).rstrip('/')+'/api/search/id/'+item['torapi_provider']
+            response=await fetch(config['proxy'],item.get('route','inherit'),endpoint,
+                                 params={'query':item['torapi_id']},timeout=16,
+                                 headers={'Accept':'application/json'})
+            magnet=torapi_detail_magnet(response.json(),item['title'])
+            if not magnet_hash(magnet):
+                raise ValueError('TorAPI не вернул корректный magnet или infohash')
+            item['magnet']=magnet
+            item['hash']=magnet_hash(magnet)
+            return {'magnet':magnet}
+        except Exception as exc:
+            raise HTTPException(502,'Не удалось получить magnet через TorAPI: '+str(exc)[:180])
     link=item.get('download')
     if not link:raise HTTPException(400,'Трекер не предоставил ссылку для получения .torrent')
     try:
